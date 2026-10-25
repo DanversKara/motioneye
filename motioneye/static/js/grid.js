@@ -262,6 +262,124 @@
         }
     }
 
+    /* ── Hide cameras (main frame hidden, PiP still works) ───────
+     * H on a frame hides that frame's main view — but the frame
+     * stays in the DOM with its stream URL, and a PiP inset carries
+     * its own video element with a copied stream URL, so a hidden
+     * camera keeps playing as an inset inside another camera. That
+     * is the point: show a camera ONLY as a PiP, never twice.
+     * Unhiding is via the eye button in the chrome bar (it appears
+     * while anything is hidden) — a hidden frame has no buttons
+     * left to click. Hidden state persists like the rest. */
+    var LS_HIDDEN = 'motioneye-grid-hidden';
+    var hiddenCams = {}; /* camera id -> true */
+
+    function loadLocalHidden() {
+        try {
+            var raw = window.localStorage.getItem(LS_HIDDEN);
+            return raw ? JSON.parse(raw) : {};
+        } catch (e) {
+            return {};
+        }
+    }
+
+    function saveLocalHidden() {
+        try {
+            window.localStorage.setItem(LS_HIDDEN, JSON.stringify(hiddenCams));
+        } catch (e) { /* ignore */ }
+    }
+
+    function persistHidden() {
+        saveLocalHidden();
+        if (typeof window.savePrefs === 'function') {
+            try {
+                window.savePrefs();
+            } catch (e) { /* prefs save is best-effort here */ }
+        }
+    }
+
+    function applyHidden() {
+        getFrames().forEach(function (frame) {
+            frame.style.display = hiddenCams[frameId(frame)] ? 'none' : '';
+        });
+    }
+
+    function hideCamera(id) {
+        hiddenCams[id] = true;
+        persistHidden();
+        var frame = document.getElementById('camera' + id);
+        if (frame) {
+            frame.style.display = 'none';
+        }
+        if (freeMode) {
+            updateFreeHeight();
+        }
+        renderHiddenPanel();
+    }
+
+    function unhideCamera(id) {
+        delete hiddenCams[id];
+        persistHidden();
+        var frame = document.getElementById('camera' + id);
+        if (frame) {
+            frame.style.display = '';
+        }
+        if (freeMode) {
+            updateFreeHeight();
+        }
+        renderHiddenPanel();
+    }
+
+    function renderHiddenPanel() {
+        var btn = document.getElementById('gridHiddenBtn');
+        var panel = document.getElementById('gridHiddenPanel');
+        if (!btn || !panel) {
+            return;
+        }
+        /* only cameras that currently exist get a row; a stale id
+         * (camera deleted) stays in storage silently and would
+         * re-hide that camera if it ever came back */
+        var ids = Object.keys(hiddenCams).filter(function (id) {
+            return document.getElementById('camera' + id);
+        });
+        btn.style.display = ids.length ? '' : 'none';
+        btn.textContent = '👁' + ids.length;
+        btn.title = 'Show hidden cameras (' + ids.length + ' hidden)';
+        panel.innerHTML = '';
+        if (!ids.length) {
+            panel.classList.remove('open');
+            return;
+        }
+        ids.forEach(function (id) {
+            var frame = document.getElementById('camera' + id);
+            var row = document.createElement('div');
+            row.className = 'grid-hidden-row';
+            var name = document.createElement('span');
+            name.textContent = frameName(frame);
+            row.appendChild(name);
+            var show = document.createElement('button');
+            show.type = 'button';
+            show.textContent = 'Show';
+            show.addEventListener('click', function (ev) {
+                ev.stopPropagation();
+                unhideCamera(id);
+            });
+            row.appendChild(show);
+            panel.appendChild(row);
+        });
+        var all = document.createElement('button');
+        all.type = 'button';
+        all.className = 'grid-hidden-show-all';
+        all.textContent = 'Show all';
+        all.addEventListener('click', function (ev) {
+            ev.stopPropagation();
+            Object.keys(hiddenCams).forEach(function (id) {
+                unhideCamera(id);
+            });
+        });
+        panel.appendChild(all);
+    }
+
     /* Corner-drag resize: pulling a frame's bottom-right corner sets
      * its width CONTINUOUSLY, as a percent of the page-container
      * width (15–100%, 1% steps), live-previewed while dragging and
@@ -603,6 +721,7 @@
                 dict['camera_layout'] = layout;
                 dict['grid_free_mode'] = freeMode;
                 dict['camera_insets'] = insets;
+                dict['camera_hidden'] = hiddenCams;
                 return dict;
             };
             wrappedToDict._gridWrapped = true;
@@ -635,6 +754,12 @@
                     insets = dict['camera_insets'];
                     saveLocalInsets();
                     restoreInsets();
+                }
+                if (dict && dict['camera_hidden'] && typeof dict['camera_hidden'] === 'object') {
+                    hiddenCams = dict['camera_hidden'];
+                    saveLocalHidden();
+                    applyHidden();
+                    renderHiddenPanel();
                 }
                 if (freeMode) {
                     applyFreeToAll();
@@ -1100,6 +1225,16 @@
             });
             frame.appendChild(pipBtn);
 
+            var hideBtn = document.createElement('div');
+            hideBtn.className = 'grid-hide-btn';
+            hideBtn.textContent = 'H';
+            hideBtn.title = 'Hide this camera (it stays available as picture-in-picture)';
+            hideBtn.addEventListener('click', function (ev) {
+                ev.stopPropagation();
+                hideCamera(id);
+            });
+            frame.appendChild(hideBtn);
+
             var resizeHandle = document.createElement('div');
             resizeHandle.className = 'grid-resize-handle';
             resizeHandle.textContent = '⤢';
@@ -1140,6 +1275,11 @@
             }
             applyFreeToAll();
         }
+        applyHidden();
+        if (freeMode) {
+            updateFreeHeight();
+        }
+        renderHiddenPanel();
     }
 
     /* ── Chrome toggle button + auto-hide ─────────────────────────
@@ -1263,7 +1403,23 @@
         }
         bar.appendChild(freeBtn);
 
+        /* hidden-cameras control: panel first (the button toggles it) */
+        var hiddenPanel = document.createElement('div');
+        hiddenPanel.id = 'gridHiddenPanel';
+        bar.appendChild(hiddenPanel);
+        var hiddenBtn = document.createElement('button');
+        hiddenBtn.type = 'button';
+        hiddenBtn.id = 'gridHiddenBtn';
+        hiddenBtn.title = 'Show hidden cameras';
+        hiddenBtn.style.display = 'none';
+        hiddenBtn.addEventListener('click', function (ev) {
+            ev.stopPropagation();
+            hiddenPanel.classList.toggle('open');
+        });
+        bar.appendChild(hiddenBtn);
+
         document.body.appendChild(bar);
+        renderHiddenPanel();
 
         /* restore saved bar position, else it stays top-center via CSS */
         try {
@@ -1338,6 +1494,7 @@
     layout = loadLocalLayout();
     freeMode = loadLocalFree();
     insets = loadLocalInsets();
+    hiddenCams = loadLocalHidden();
     document.body.classList.toggle('grid-free', freeMode);
     /* swallow the click that follows a frame drag, nothing else */
     document.addEventListener('click', function (e) {

@@ -42,6 +42,7 @@ div.page-container.four-columns:not(.single-cam):not(.full-screen) div.camera-fr
 
 div.camera-frame .grid-size-btn,
 div.camera-frame .grid-pip-btn,
+div.camera-frame .grid-hide-btn,
 div.camera-frame .grid-resize-handle {
     position: absolute;
     width: 1.8em;
@@ -66,6 +67,10 @@ div.camera-frame .grid-pip-btn {
     top: 0.2em;
     left: 2.2em;
 }
+div.camera-frame .grid-hide-btn {
+    top: 0.2em;
+    left: 4.2em;
+}
 div.camera-frame .grid-resize-handle {
     right: 0.2em;
     bottom: 0.2em;
@@ -74,6 +79,7 @@ div.camera-frame .grid-resize-handle {
 }
 div.camera-frame .grid-size-btn:hover,
 div.camera-frame .grid-pip-btn:hover,
+div.camera-frame .grid-hide-btn:hover,
 div.camera-frame .grid-resize-handle:hover {
     opacity: 1;
 }
@@ -83,10 +89,12 @@ div.page-container.single-cam div.camera-frame .grid-size-btn,
 div.page-container.single-cam div.camera-frame .grid-resize-handle,
 div.page-container.single-cam div.camera-frame .grid-drag-btn,
 div.page-container.single-cam div.camera-frame .grid-free-handle,
+div.page-container.single-cam div.camera-frame .grid-hide-btn,
 div.page-container.full-screen div.camera-frame .grid-size-btn,
 div.page-container.full-screen div.camera-frame .grid-resize-handle,
 div.page-container.full-screen div.camera-frame .grid-drag-btn,
-div.page-container.full-screen div.camera-frame .grid-free-handle {
+div.page-container.full-screen div.camera-frame .grid-free-handle,
+div.page-container.full-screen div.camera-frame .grid-hide-btn {
     display: none;
 }
 div.camera-frame .grid-drag-btn {
@@ -335,6 +343,57 @@ body.grid-chrome-hidden div.page-container {
     background: #3a7bd5;
     border-color: #3a7bd5;
 }
+/* Hidden-cameras control: the eye button only appears while at
+ * least one camera is hidden; its panel lists them with a Show
+ * button each (plus Show all). It rides inside the bar, so it
+ * moves with it and hides on idle with everything else. */
+#gridHiddenBtn {
+    background: rgba(255, 255, 255, 0.12);
+    border: 1px solid rgba(255, 255, 255, 0.35);
+    border-radius: 14px;
+    color: #fff;
+    font-size: 12px;
+    padding: 6px 10px;
+    cursor: pointer;
+}
+#gridHiddenPanel {
+    display: none;
+    position: absolute;
+    top: calc(100% + 6px);
+    left: 50%;
+    transform: translateX(-50%);
+    min-width: 180px;
+    background: rgba(33, 33, 33, 0.92);
+    border: 1px solid rgba(255, 255, 255, 0.25);
+    border-radius: 10px;
+    padding: 6px;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+}
+#gridHiddenPanel.open {
+    display: block;
+}
+#gridHiddenPanel .grid-hidden-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 2px;
+    color: #fff;
+    font-size: 13px;
+}
+#gridHiddenPanel button {
+    background: rgba(255, 255, 255, 0.12);
+    border: 1px solid rgba(255, 255, 255, 0.35);
+    border-radius: 10px;
+    color: #fff;
+    font-size: 12px;
+    padding: 3px 8px;
+    cursor: pointer;
+}
+#gridHiddenPanel .grid-hidden-show-all {
+    width: 100%;
+    margin-top: 4px;
+}
 #gridChromeBtn:hover {
     background-color: rgba(33, 33, 33, 0.95);
 }
@@ -370,7 +429,8 @@ body.grid-idle div.camera-frame .grid-size-btn,
 body.grid-idle div.camera-frame .grid-pip-btn,
 body.grid-idle div.camera-frame .grid-resize-handle,
 body.grid-idle div.camera-frame .grid-drag-btn,
-body.grid-idle div.camera-frame .grid-free-handle {
+body.grid-idle div.camera-frame .grid-free-handle,
+body.grid-idle div.camera-frame .grid-hide-btn {
     display: none;
 }
 body.grid-idle div.camera-frame .move-camera {
