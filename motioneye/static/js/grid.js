@@ -232,6 +232,36 @@
         }
     }
 
+    /* ── Inset PiP: storage (so a refresh keeps your insets) ─────
+     * Inset state used to live only in memory: a page reload wiped
+     * every PiP and the user had to re-set them all. Now each inset
+     * (host -> camera + geometry) persists like sizes do. */
+    var LS_INSETS = 'motioneye-grid-insets';
+
+    function loadLocalInsets() {
+        try {
+            var raw = window.localStorage.getItem(LS_INSETS);
+            return raw ? JSON.parse(raw) : {};
+        } catch (e) {
+            return {};
+        }
+    }
+
+    function saveLocalInsets() {
+        try {
+            window.localStorage.setItem(LS_INSETS, JSON.stringify(insets));
+        } catch (e) { /* ignore */ }
+    }
+
+    function persistInsets() {
+        saveLocalInsets();
+        if (typeof window.savePrefs === 'function') {
+            try {
+                window.savePrefs();
+            } catch (e) { /* prefs save is best-effort here */ }
+        }
+    }
+
     /* Corner-drag resize: pulling a frame's bottom-right corner sets
      * its width CONTINUOUSLY, as a percent of the page-container
      * width (15–100%, 1% steps), live-previewed while dragging and
@@ -400,6 +430,7 @@
         var btn = document.getElementById('gridFreeBtn');
         if (btn) {
             btn.classList.toggle('active', on);
+            btn.textContent = on ? 'Free ON' : 'Free';
         }
         var container = $('div.page-container');
         if (!on) {
@@ -418,6 +449,85 @@
             convertFreeLayout();
         }
         applyFreeToAll();
+    }
+
+    /* Clicks that follow a real frame drag must not leak through to
+     * motionEye (a drag that ends on the frame would otherwise also
+     * fire the frame's click). Time-boxed, not one-shot: a click
+     * more than half a second after the drag is a new click. */
+    var freeDragSuppressUntil = 0;
+
+    /* In free mode, grab the frame ANYWHERE (not just the small ✥):
+     * the video itself is the handle. Controls, the inset, and
+     * motionEye's own overlay buttons are excluded, so their clicks
+     * still work. A press without movement stays a plain click. */
+    function addFrameBodyDrag(frame, id) {
+        frame.addEventListener('pointerdown', function (e) {
+            if (!freeMode || !e.isPrimary || e.button !== 0) {
+                return;
+            }
+            if (e.target.closest('select, input, textarea, button, a, .button, .grid-size-btn, .grid-pip-btn, .grid-resize-handle, .grid-free-handle, .grid-drag-btn, .move-camera, .grid-inset')) {
+                return;
+            }
+            var container = $('div.page-container');
+            if (!container) {
+                return;
+            }
+            var cr = container.getBoundingClientRect();
+            var fr = frame.getBoundingClientRect();
+            if (!cr.width) {
+                return;
+            }
+            var grabDX = e.clientX - fr.left;
+            var grabDY = e.clientY - fr.top;
+            var startX = e.clientX;
+            var startY = e.clientY;
+            var dragging = false;
+            function onMove(ev) {
+                if (ev.pointerId !== e.pointerId) {
+                    return;
+                }
+                if (!dragging) {
+                    if (Math.abs(ev.clientX - startX) < 4 && Math.abs(ev.clientY - startY) < 4) {
+                        return;
+                    }
+                    dragging = true;
+                    freeTopZ += 1;
+                    frame.style.zIndex = freeTopZ;
+                }
+                var c = container.getBoundingClientRect();
+                if (!c.width) {
+                    return;
+                }
+                var w = frame.getBoundingClientRect().width / c.width * 100;
+                var left = (ev.clientX - grabDX - c.left) / c.width * 100;
+                left = Math.max(0, Math.min(Math.max(0, 100 - w), left));
+                var top = Math.max(0, ev.clientY - grabDY - c.top);
+                frame.style.left = Math.round(left * 10) / 10 + '%';
+                frame.style.top = Math.round(top) + 'px';
+                updateFreeHeight();
+            }
+            function onUp(ev) {
+                if (ev.pointerId !== e.pointerId) {
+                    return;
+                }
+                document.removeEventListener('pointermove', onMove);
+                document.removeEventListener('pointerup', onUp);
+                document.removeEventListener('pointercancel', onUp);
+                if (dragging) {
+                    var st = layout[id] || (layout[id] = {});
+                    st.left = parseFloat(frame.style.left) || 0;
+                    st.top = parseFloat(frame.style.top) || 0;
+                    st.z = freeTopZ;
+                    persistLayout();
+                    freeDragSuppressUntil = Date.now() + 500;
+                }
+                updateFreeHeight();
+            }
+            document.addEventListener('pointermove', onMove);
+            document.addEventListener('pointerup', onUp);
+            document.addEventListener('pointercancel', onUp);
+        });
     }
 
     function addFreeDrag(handle, frame, id) {
@@ -492,6 +602,7 @@
                 dict['camera_sizes'] = sizes;
                 dict['camera_layout'] = layout;
                 dict['grid_free_mode'] = freeMode;
+                dict['camera_insets'] = insets;
                 return dict;
             };
             wrappedToDict._gridWrapped = true;
@@ -517,7 +628,13 @@
                     var fb = document.getElementById('gridFreeBtn');
                     if (fb) {
                         fb.classList.toggle('active', freeMode);
+                        fb.textContent = freeMode ? 'Free ON' : 'Free';
                     }
+                }
+                if (dict && dict['camera_insets'] && typeof dict['camera_insets'] === 'object') {
+                    insets = dict['camera_insets'];
+                    saveLocalInsets();
+                    restoreInsets();
                 }
                 if (freeMode) {
                     applyFreeToAll();
@@ -590,6 +707,7 @@
         if (inset.style.width) {
             st.width = parseFloat(inset.style.width) || 0;
         }
+        persistInsets();
     }
 
     function clampInsetToHost(inset, host) {
@@ -749,7 +867,14 @@
             inset.style.top = state.top + 'px';
             inset.style.right = 'auto';
             inset.style.bottom = 'auto';
-            clampInsetToHost(inset, host);
+            /* only clamp against a laid-out host: at boot the video
+             * may not have sized the frame yet (host rect 0), and
+             * clamping against that would pin the inset to 0,0 and
+             * lose the saved spot. Unclamped it lands right once
+             * the host grows; any later drag/resize re-clamps. */
+            if (hostRect.width > 0 && hostRect.height > 0) {
+                clampInsetToHost(inset, host);
+            }
         }
         inset.querySelector('.grid-inset-select').addEventListener('change', function () {
             setInsetCamera(inset, hostId, this.value);
@@ -771,6 +896,7 @@
             inset.remove();
         }
         delete insets[frameId(host)];
+        persistInsets();
     }
 
     function toggleInset(hostId) {
@@ -988,6 +1114,15 @@
             addFreeDrag(freeHandle, frame, id);
             frame.appendChild(freeHandle);
 
+            /* grab-anywhere dragging + no native image drag: without
+             * this, dragging the video starts the browser's image
+             * drag (ghost picture) instead of moving the frame */
+            var camImg = frame.querySelector('img.camera');
+            if (camImg) {
+                camImg.draggable = false;
+            }
+            addFrameBodyDrag(frame, id);
+
             if (!hasUpstream) {
                 addFallbackDrag(frame);
             }
@@ -1043,19 +1178,20 @@
         return false;
     }
 
-    function showAll() {
-        document.body.classList.remove('grid-chrome-hidden');
-        document.body.classList.remove('grid-idle');
-    }
-
+    /* The guard only ever BLOCKS auto-hiding; it never forces
+     * anything shown. An earlier version re-showed everything from
+     * the timer and from activity while a dialog was open, which
+     * put the header back right after the user had hidden it and
+     * made the circle button look dead. Now: an explicit circle
+     * click always toggles and sticks; the timer just waits out
+     * open dialogs and hides once they close. */
     function scheduleHide() {
         if (hideTimer) {
             clearTimeout(hideTimer);
         }
         hideTimer = setTimeout(function () {
             if (chromeGuard()) {
-                showAll();
-                scheduleHide(); /* re-check after settings/modal close */
+                scheduleHide(); /* state untouched; re-check later */
             } else {
                 document.body.classList.add('grid-chrome-hidden');
                 document.body.classList.add('grid-idle');
@@ -1064,10 +1200,6 @@
     }
 
     function onActivity() {
-        if (chromeGuard()) {
-            showAll();
-            return;
-        }
         document.body.classList.remove('grid-idle');
         scheduleHide();
     }
@@ -1106,10 +1238,8 @@
         btn.appendChild(logo);
         btn.addEventListener('click', function (ev) {
             ev.stopPropagation();
-            if (chromeGuard()) {
-                showAll();
-                return;
-            }
+            /* explicit clicks always toggle, even with a dialog
+             * open — the guard governs auto-hide only */
             document.body.classList.toggle('grid-chrome-hidden');
             document.body.classList.remove('grid-idle');
             scheduleHide();
@@ -1129,6 +1259,7 @@
         });
         if (freeMode) {
             freeBtn.classList.add('active');
+            freeBtn.textContent = 'Free ON';
         }
         bar.appendChild(freeBtn);
 
@@ -1206,7 +1337,15 @@
     sizes = loadLocalSizes();
     layout = loadLocalLayout();
     freeMode = loadLocalFree();
+    insets = loadLocalInsets();
     document.body.classList.toggle('grid-free', freeMode);
+    /* swallow the click that follows a frame drag, nothing else */
+    document.addEventListener('click', function (e) {
+        if (Date.now() < freeDragSuppressUntil) {
+            e.preventDefault();
+            e.stopPropagation();
+        }
+    }, true);
     wrapPrefs();
 
     var container = $('div.page-container');

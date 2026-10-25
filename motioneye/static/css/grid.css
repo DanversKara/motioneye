@@ -296,7 +296,12 @@ body.grid-chrome-hidden div.page-container {
     border: 1px solid rgba(255, 255, 255, 0.25);
     border-radius: 24px;
     box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
-    z-index: 1500;
+    /* motionEye's header is z 10000 and its dialogs z 10001: the bar
+     * must sit above the header (else the header covers it, greys
+     * it through its translucent background, and eats its clicks)
+     * but below the dialogs. 10000 ties the header and wins on DOM
+     * order (the bar is appended last), while dialogs still win. */
+    z-index: 10000;
     touch-action: none;
     transition: opacity 0.3s ease;
 }
