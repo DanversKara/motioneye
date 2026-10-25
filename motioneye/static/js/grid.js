@@ -9,9 +9,14 @@
  *      cells of width. Sizes persist server-side in the user's prefs
  *      (a `camera_sizes` key piggybacking on the page's own save/load
  *      functions) with a localStorage fallback on old versions.
- *   2. Picture-in-picture: a button on every frame opens that camera in
- *      a floating box (draggable by its header, resizable by its corner
- *      handle) with a dropdown to switch it to another camera.
+ *   2. Inset picture-in-picture: the P button on a frame adds a small
+ *      live inset of ANOTHER camera INSIDE that frame. The inset drags
+ *      anywhere within the host frame and resizes by its corner
+ *      handle, both clamped to the host's bounds, with a dropdown to
+ *      switch it to another camera. Its title bar can be hidden (it
+ *      otherwise covers part of the host's video); a tiny tab remains
+ *      to bring the title back. One inset per host; pressing P again
+ *      removes it. Insets survive motionEye rebuilding the frames.
  *   3. Chrome toggle + auto-hide: a circle button (top-center, with
  *      the motionEye icon) appears whenever the mouse moves or the
  *      screen is tapped, and hides after 4 seconds idle — together
@@ -48,7 +53,7 @@
     var HIDE_IDLE_MS = 4000;
 
     var sizes = {}; /* camera id -> 'tiny' | 'large' (normal = absent) */
-    var pipOpen = false;
+    var insets = {}; /* hostId -> {cameraId, titleHidden, left, top, width} */
     var upstreamReorder = null; /* true/false once detected */
 
     function $(sel, root) {
@@ -226,76 +231,45 @@
         }
     }
 
-    /* ── Picture-in-picture ─────────────────────────────────────── */
+    /* ── Inset picture-in-picture ───────────────────────────────────
+     * The P button on a frame adds a small live inset of ANOTHER camera
+     * INSIDE that frame (the host). The inset drags anywhere within
+     * the host and resizes by its corner handle, both clamped to the
+     * host's bounds. Its title bar can be hidden (it otherwise covers
+     * part of the host's video); a tiny tab remains to bring it back.
+     * One inset per host; P again removes it. State is kept in memory
+     * so insets are re-created when motionEye rebuilds the frames. */
 
-    function pipBox() {
-        var box = $('#gridPipBox');
-        if (box) {
-            return box;
-        }
-        box = document.createElement('div');
-        box.id = 'gridPipBox';
-        box.hidden = true;
-        box.innerHTML =
-            '<div class="grid-pip-header">' +
-                '<span class="grid-pip-name"></span>' +
-                '<select class="grid-pip-select"></select>' +
-                '<button type="button" class="grid-pip-close" title="Close picture-in-picture">✕</button>' +
-            '</div>' +
-            '<img class="grid-pip-img" alt="">';
-        document.body.appendChild(box);
-
-        box.querySelector('.grid-pip-close').addEventListener('click', closePip);
-        box.querySelector('.grid-pip-select').addEventListener('change', function () {
-            openPip(this.value);
+    function insetSourceFrames(hostId) {
+        return getFrames().filter(function (f) {
+            return frameId(f) !== hostId;
         });
-
-        /* drag by the header */
-        var header = box.querySelector('.grid-pip-header');
-        header.addEventListener('pointerdown', function (e) {
-            if (!e.isPrimary || e.button !== 0 || e.target.tagName === 'SELECT' || e.target.tagName === 'BUTTON') {
-                return;
-            }
-            var rect = box.getBoundingClientRect();
-            var dx = e.clientX - rect.left;
-            var dy = e.clientY - rect.top;
-            box.style.left = rect.left + 'px';
-            box.style.top = rect.top + 'px';
-            box.style.right = 'auto';
-            box.style.bottom = 'auto';
-            function onMove(ev) {
-                if (ev.pointerId !== e.pointerId) {
-                    return;
-                }
-                box.style.left = Math.max(0, Math.min(window.innerWidth - 80, ev.clientX - dx)) + 'px';
-                box.style.top = Math.max(0, Math.min(window.innerHeight - 40, ev.clientY - dy)) + 'px';
-            }
-            function onUp(ev) {
-                if (ev.pointerId !== e.pointerId) {
-                    return;
-                }
-                document.removeEventListener('pointermove', onMove);
-                document.removeEventListener('pointerup', onUp);
-                document.removeEventListener('pointercancel', onUp);
-            }
-            document.addEventListener('pointermove', onMove);
-            document.addEventListener('pointerup', onUp);
-            document.addEventListener('pointercancel', onUp);
-            e.preventDefault();
-        });
-
-        return box;
     }
 
-    function rebuildPipSelect() {
-        var box = $('#gridPipBox');
-        if (!box) {
+    function setInsetCamera(inset, hostId, cameraId) {
+        var frame = document.getElementById('camera' + cameraId);
+        var img = inset.querySelector('.grid-inset-img');
+        if (!frame) {
+            inset.querySelector('.grid-inset-name').textContent = 'Camera ' + cameraId;
+            img.removeAttribute('src');
             return;
         }
-        var select = box.querySelector('.grid-pip-select');
+        var src = frameStreamSrc(frame);
+        if (src) {
+            img.setAttribute('src', src);
+        }
+        inset.querySelector('.grid-inset-name').textContent = frameName(frame);
+        var select = inset.querySelector('.grid-inset-select');
+        if (select.value !== cameraId) {
+            select.value = cameraId;
+        }
+    }
+
+    function rebuildInsetSelect(inset, hostId) {
+        var select = inset.querySelector('.grid-inset-select');
         var current = select.value;
         select.innerHTML = '';
-        getFrames().forEach(function (frame) {
+        insetSourceFrames(hostId).forEach(function (frame) {
             var opt = document.createElement('option');
             opt.value = frameId(frame);
             opt.textContent = frameName(frame);
@@ -306,32 +280,230 @@
         }
     }
 
-    function openPip(cameraId) {
-        var box = pipBox();
-        var frame = document.getElementById('camera' + cameraId);
-        if (!frame) {
-            return;
+    function saveInsetState(inset, hostId) {
+        var st = insets[hostId] || (insets[hostId] = {});
+        st.cameraId = inset.querySelector('.grid-inset-select').value;
+        st.titleHidden = inset.classList.contains('title-hidden');
+        /* only left/top-anchored insets have a stored position; a
+         * never-dragged inset re-appears bottom-right by default */
+        if (inset.style.left) {
+            st.left = parseFloat(inset.style.left) || 0;
+            st.top = parseFloat(inset.style.top) || 0;
         }
-        var img = box.querySelector('.grid-pip-img');
-        var src = frameStreamSrc(frame);
-        if (src) {
-            img.setAttribute('src', src);
+        if (inset.style.width) {
+            st.width = parseFloat(inset.style.width) || 0;
         }
-        box.querySelector('.grid-pip-name').textContent = frameName(frame);
-        rebuildPipSelect();
-        box.querySelector('.grid-pip-select').value = cameraId;
-        box.hidden = false;
-        pipOpen = true;
     }
 
-    function closePip() {
-        var box = $('#gridPipBox');
-        if (!box) {
+    function clampInsetToHost(inset, host) {
+        var hr = host.getBoundingClientRect();
+        var ir = inset.getBoundingClientRect();
+        var left = inset.style.left ? (parseFloat(inset.style.left) || 0) : (hr.width - ir.width - 8);
+        var top = inset.style.top ? (parseFloat(inset.style.top) || 0) : (hr.height - ir.height - 8);
+        left = Math.max(0, Math.min(Math.max(0, hr.width - ir.width), left));
+        top = Math.max(0, Math.min(Math.max(0, hr.height - ir.height), top));
+        inset.style.left = left + 'px';
+        inset.style.top = top + 'px';
+        inset.style.right = 'auto';
+        inset.style.bottom = 'auto';
+    }
+
+    function addInsetDrag(inset, host, hostId) {
+        inset.addEventListener('pointerdown', function (e) {
+            if (!e.isPrimary || e.button !== 0) {
+                return;
+            }
+            var tag = e.target.tagName;
+            if (tag === 'SELECT' || tag === 'BUTTON' || tag === 'OPTION') {
+                return;
+            }
+            /* the tab restores the title, it does not drag */
+            if (e.target.classList.contains('grid-inset-tab')) {
+                return;
+            }
+            e.preventDefault();
+            e.stopPropagation();
+            /* convert any right/bottom anchoring to left/top first */
+            var hr = host.getBoundingClientRect();
+            var ir = inset.getBoundingClientRect();
+            var startLeft = ir.left - hr.left;
+            var startTop = ir.top - hr.top;
+            inset.style.left = startLeft + 'px';
+            inset.style.top = startTop + 'px';
+            inset.style.right = 'auto';
+            inset.style.bottom = 'auto';
+            var startX = e.clientX;
+            var startY = e.clientY;
+            function onMove(ev) {
+                if (ev.pointerId !== e.pointerId) {
+                    return;
+                }
+                var w = inset.getBoundingClientRect().width;
+                var h = inset.getBoundingClientRect().height;
+                var hw = host.getBoundingClientRect().width;
+                var hh = host.getBoundingClientRect().height;
+                inset.style.left = Math.max(0, Math.min(Math.max(0, hw - w), startLeft + (ev.clientX - startX))) + 'px';
+                inset.style.top = Math.max(0, Math.min(Math.max(0, hh - h), startTop + (ev.clientY - startY))) + 'px';
+            }
+            function onUp(ev) {
+                if (ev.pointerId !== e.pointerId) {
+                    return;
+                }
+                document.removeEventListener('pointermove', onMove);
+                document.removeEventListener('pointerup', onUp);
+                document.removeEventListener('pointercancel', onUp);
+                saveInsetState(inset, hostId);
+            }
+            document.addEventListener('pointermove', onMove);
+            document.addEventListener('pointerup', onUp);
+            document.addEventListener('pointercancel', onUp);
+        });
+    }
+
+    function addInsetResize(handle, inset, host, hostId) {
+        handle.addEventListener('pointerdown', function (e) {
+            if (!e.isPrimary || e.button !== 0) {
+                return;
+            }
+            e.preventDefault();
+            e.stopPropagation();
+            /* anchor to left/top so width changes grow right/down */
+            var hr = host.getBoundingClientRect();
+            var ir = inset.getBoundingClientRect();
+            inset.style.left = (ir.left - hr.left) + 'px';
+            inset.style.top = (ir.top - hr.top) + 'px';
+            inset.style.right = 'auto';
+            inset.style.bottom = 'auto';
+            var startW = ir.width;
+            var startX = e.clientX;
+            function onMove(ev) {
+                if (ev.pointerId !== e.pointerId) {
+                    return;
+                }
+                var hw = host.getBoundingClientRect().width;
+                var hh = host.getBoundingClientRect().height;
+                var left = parseFloat(inset.style.left) || 0;
+                var top = parseFloat(inset.style.top) || 0;
+                var maxW = Math.max(120, hw - left);
+                var newW = Math.max(120, Math.min(maxW, startW + (ev.clientX - startX)));
+                inset.style.width = newW + 'px';
+                /* keep it inside vertically too: shrink until the
+                 * bottom fits (one correction pass is enough, since
+                 * height scales with width) */
+                var r = inset.getBoundingClientRect();
+                if (top + r.height > hh) {
+                    var overflow = top + r.height - hh;
+                    inset.style.width = Math.max(120, newW - overflow * (r.width / Math.max(1, r.height))) + 'px';
+                }
+            }
+            function onUp(ev) {
+                if (ev.pointerId !== e.pointerId) {
+                    return;
+                }
+                document.removeEventListener('pointermove', onMove);
+                document.removeEventListener('pointerup', onUp);
+                document.removeEventListener('pointercancel', onUp);
+                saveInsetState(inset, hostId);
+            }
+            document.addEventListener('pointermove', onMove);
+            document.addEventListener('pointerup', onUp);
+            document.addEventListener('pointercancel', onUp);
+        });
+    }
+
+    function createInset(host, hostId, state) {
+        var sources = insetSourceFrames(hostId);
+        if (!sources.length) {
+            return null;
+        }
+        var inset = document.createElement('div');
+        inset.className = 'grid-inset';
+        inset.innerHTML =
+            '<div class="grid-inset-header">' +
+                '<span class="grid-inset-name"></span>' +
+                '<select class="grid-inset-select"></select>' +
+                '<button type="button" class="grid-inset-hide" title="Hide title bar">—</button>' +
+                '<button type="button" class="grid-inset-close" title="Close picture-in-picture">✕</button>' +
+            '</div>' +
+            '<div class="grid-inset-tab" title="Show title bar">≡</div>' +
+            '<img class="grid-inset-img" alt="" draggable="false">' +
+            '<div class="grid-inset-resize" title="Drag to resize inside this camera">⤢</div>';
+        /* default: bottom-right of the host, ~30% of its width */
+        inset.style.right = '8px';
+        inset.style.bottom = '8px';
+        host.appendChild(inset);
+        rebuildInsetSelect(inset, hostId);
+        var cameraId = (state && state.cameraId) || frameId(sources[0]);
+        if (inset.querySelector('.grid-inset-select').value !== cameraId) {
+            inset.querySelector('.grid-inset-select').value = cameraId;
+        }
+        setInsetCamera(inset, hostId, cameraId);
+        var hostRect = host.getBoundingClientRect();
+        inset.style.width = Math.max(120, Math.round(hostRect.width * 0.3)) + 'px';
+        if (state && state.titleHidden) {
+            inset.classList.add('title-hidden');
+        }
+        if (state && state.width) {
+            inset.style.width = Math.max(120, state.width) + 'px';
+        }
+        if (state && typeof state.left === 'number') {
+            inset.style.left = state.left + 'px';
+            inset.style.top = state.top + 'px';
+            inset.style.right = 'auto';
+            inset.style.bottom = 'auto';
+            clampInsetToHost(inset, host);
+        }
+        inset.querySelector('.grid-inset-select').addEventListener('change', function () {
+            setInsetCamera(inset, hostId, this.value);
+            saveInsetState(inset, hostId);
+        });
+        inset.querySelector('.grid-inset-close').addEventListener('click', function (ev) {
+            ev.stopPropagation();
+            removeInset(host);
+        });
+        inset.querySelector('.grid-inset-hide').addEventListener('click', function (ev) {
+            ev.stopPropagation();
+            inset.classList.add('title-hidden');
+            saveInsetState(inset, hostId);
+        });
+        inset.querySelector('.grid-inset-tab').addEventListener('click', function (ev) {
+            ev.stopPropagation();
+            inset.classList.remove('title-hidden');
+            saveInsetState(inset, hostId);
+        });
+        addInsetDrag(inset, host, hostId);
+        addInsetResize(inset.querySelector('.grid-inset-resize'), inset, host, hostId);
+        saveInsetState(inset, hostId);
+        return inset;
+    }
+
+    function removeInset(host) {
+        var inset = host.querySelector('.grid-inset');
+        if (inset) {
+            inset.remove();
+        }
+        delete insets[frameId(host)];
+    }
+
+    function toggleInset(hostId) {
+        var host = document.getElementById('camera' + hostId);
+        if (!host) {
             return;
         }
-        box.querySelector('.grid-pip-img').removeAttribute('src');
-        box.hidden = true;
-        pipOpen = false;
+        if (host.querySelector('.grid-inset')) {
+            removeInset(host);
+            return;
+        }
+        createInset(host, hostId, insets[hostId]);
+    }
+
+    function restoreInsets() {
+        Object.keys(insets).forEach(function (hostId) {
+            var host = document.getElementById('camera' + hostId);
+            if (host && !host.querySelector('.grid-inset')) {
+                createInset(host, hostId, insets[hostId]);
+            }
+        });
     }
 
     /* ── Reorder: upstream handles always on, fallback drag ─────── */
@@ -507,10 +679,10 @@
             var pipBtn = document.createElement('div');
             pipBtn.className = 'grid-pip-btn';
             pipBtn.textContent = 'P';
-            pipBtn.title = 'Picture-in-picture';
+            pipBtn.title = 'Picture-in-picture inside this camera';
             pipBtn.addEventListener('click', function (ev) {
                 ev.stopPropagation();
-                openPip(id);
+                toggleInset(id);
             });
             frame.appendChild(pipBtn);
 
@@ -531,9 +703,7 @@
         } else {
             applyLocalOrder();
         }
-        if (pipOpen) {
-            rebuildPipSelect();
-        }
+        restoreInsets();
     }
 
     /* ── Chrome toggle button + auto-hide ─────────────────────────

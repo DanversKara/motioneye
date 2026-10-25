@@ -105,65 +105,102 @@ div.camera-frame .grid-drag-btn {
     z-index: 1;
 }
 
-/* ── Picture-in-picture box ───────────────────────────────────── */
-
-#gridPipBox {
-    position: fixed;
-    right: 20px;
-    bottom: 60px;
-    width: 320px;
-    min-width: 160px;
-    min-height: 90px;
+/* ── Inset picture-in-picture ───────────────────────────────────
+ * Lives INSIDE a camera frame (the frame is position:relative
+ * upstream), never over the page grid. Drags and resizes only
+ * within the host frame; the title bar hides on demand (a tiny
+ * tab brings it back) so it never covers the host's video. The
+ * inset is video you want to watch, so it is NOT hidden by the
+ * idle auto-hide. */
+div.camera-frame .grid-inset {
+    position: absolute;
+    min-width: 120px;
     background: #212121;
-    border: 1px solid #555;
+    border: 1px solid rgba(255, 255, 255, 0.4);
     border-radius: 6px;
-    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6);
-    z-index: 2000;
-    resize: both;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6);
+    z-index: 6;
     overflow: hidden;
+    touch-action: none;
 }
-#gridPipBox[hidden] {
-    display: none;
-}
-#gridPipBox .grid-pip-header {
+div.camera-frame .grid-inset .grid-inset-header {
     display: flex;
     align-items: center;
-    gap: 6px;
-    padding: 4px 8px;
+    gap: 4px;
+    padding: 3px 6px;
     background: #333;
     cursor: grab;
     touch-action: none;
 }
-#gridPipBox .grid-pip-name {
+div.camera-frame .grid-inset .grid-inset-name {
     flex: 1;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
     color: #fff;
-    font-size: 13px;
+    font-size: 12px;
 }
-#gridPipBox .grid-pip-select {
+div.camera-frame .grid-inset .grid-inset-select {
     flex: 0 1 auto;
-    max-width: 140px;
+    max-width: 110px;
     background: #333;
     color: #fff;
     border: 1px solid #555;
     border-radius: 4px;
-    font-size: 13px;
+    font-size: 12px;
 }
-#gridPipBox .grid-pip-close {
+div.camera-frame .grid-inset .grid-inset-hide,
+div.camera-frame .grid-inset .grid-inset-close {
     background: transparent;
     border: none;
     color: #fff;
-    font-size: 14px;
+    font-size: 13px;
     cursor: pointer;
-    padding: 0 4px;
+    padding: 0 3px;
 }
-#gridPipBox .grid-pip-img {
+div.camera-frame .grid-inset .grid-inset-img {
     display: block;
     width: 100%;
     height: auto;
     background: #000;
+}
+div.camera-frame .grid-inset .grid-inset-tab {
+    display: none;
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 1.6em;
+    height: 1.6em;
+    line-height: 1.6em;
+    text-align: center;
+    font-size: 12px;
+    color: #fff;
+    background: rgba(0, 0, 0, 0.55);
+    border-radius: 0 0 4px 0;
+    cursor: pointer;
+    z-index: 2;
+}
+div.camera-frame .grid-inset.title-hidden .grid-inset-header {
+    display: none;
+}
+div.camera-frame .grid-inset.title-hidden .grid-inset-tab {
+    display: block;
+}
+div.camera-frame .grid-inset .grid-inset-resize {
+    position: absolute;
+    right: 0;
+    bottom: 0;
+    width: 1.4em;
+    height: 1.4em;
+    line-height: 1.4em;
+    text-align: center;
+    font-size: 11px;
+    color: #fff;
+    background: rgba(0, 0, 0, 0.55);
+    border-radius: 4px 0 0 0;
+    cursor: nwse-resize;
+    touch-action: none;
+    z-index: 2;
 }
 
 /* ── Auto-hide header/footer + gap fix ───────────────────────────
