@@ -69,6 +69,16 @@
      * set by dragging a frame's corner. Percents survive window and
      * column-count changes, unlike pixel widths. */
     var sizes = {};
+    var LS_LAYOUT = 'motioneye-grid-layout';
+    var LS_FREE = 'motioneye-grid-free';
+    var LS_BAR_POS = 'motioneye-grid-bar-pos';
+    /* free layout: camera id -> {left (%), top (px), z}. Left/width
+     * are percents (they scale with the window); top is pixels
+     * (percent-of-height would be circular, since the container's
+     * height is itself derived from the frames' bottoms). */
+    var layout = {};
+    var freeMode = false;
+    var freeTopZ = 10;
     var insets = {}; /* hostId -> {cameraId, left, top, width} */
     var upstreamReorder = null; /* true/false once detected */
 
@@ -145,6 +155,9 @@
                 }
             }
         });
+        if (freeMode) {
+            updateFreeHeight();
+        }
     }
 
     function applySizeToMap(id, size) {
@@ -168,6 +181,55 @@
     function setSize(id, size) {
         applySizeToMap(id, size);
         persistSizes();
+    }
+
+    /* ── Free layout: storage ───────────────────────────────────── */
+
+    function loadLocalLayout() {
+        try {
+            var raw = window.localStorage.getItem(LS_LAYOUT);
+            return raw ? JSON.parse(raw) : {};
+        } catch (e) {
+            return {};
+        }
+    }
+
+    function saveLocalLayout() {
+        try {
+            window.localStorage.setItem(LS_LAYOUT, JSON.stringify(layout));
+        } catch (e) { /* ignore */ }
+    }
+
+    function persistLayout() {
+        saveLocalLayout();
+        if (typeof window.savePrefs === 'function') {
+            try {
+                window.savePrefs();
+            } catch (e) { /* prefs save is best-effort here */ }
+        }
+    }
+
+    function loadLocalFree() {
+        try {
+            return window.localStorage.getItem(LS_FREE) === '1';
+        } catch (e) {
+            return false;
+        }
+    }
+
+    function saveLocalFree() {
+        try {
+            window.localStorage.setItem(LS_FREE, freeMode ? '1' : '0');
+        } catch (e) { /* ignore */ }
+    }
+
+    function persistFreeMode() {
+        saveLocalFree();
+        if (typeof window.savePrefs === 'function') {
+            try {
+                window.savePrefs();
+            } catch (e) { /* prefs save is best-effort here */ }
+        }
     }
 
     /* Corner-drag resize: pulling a frame's bottom-right corner sets
@@ -231,6 +293,194 @@
         setSize(id, next);
     }
 
+    /* ── Free layout: drag anywhere, any size ─────────────────────
+     * Grid mode lays frames out in flow (rows). Free mode makes every
+     * frame absolutely positioned inside the page-container, so it
+     * can sit anywhere — including the gaps flow layout can never
+     * fill — and overlap others. Widths keep working exactly as in
+     * grid mode (presets or custom %); only position is free, and
+     * height still follows the video's aspect ratio (a free height
+     * would crop or stretch the picture).
+     *   - move: drag a frame's ✥ handle (top-center, free mode only).
+     *   - resize: the corner handle, as in grid mode (width %).
+     *   - the dragged frame comes to the front (z remembered).
+     *   - the container's height is derived (tallest frame bottom),
+     *     so the footer stays below the layout. */
+
+    function updateFreeHeight() {
+        var container = $('div.page-container');
+        if (!container || !freeMode) {
+            return;
+        }
+        var cr = container.getBoundingClientRect();
+        var maxBottom = 0;
+        getFrames().forEach(function (frame) {
+            var bottom = frame.getBoundingClientRect().bottom - cr.top;
+            if (bottom > maxBottom) {
+                maxBottom = bottom;
+            }
+        });
+        container.style.minHeight = Math.ceil(maxBottom) + 'px';
+    }
+
+    function defaultFreeSpot() {
+        /* a camera with no saved spot parks below the others */
+        var container = $('div.page-container');
+        var top = 0;
+        if (container) {
+            var cr = container.getBoundingClientRect();
+            getFrames().forEach(function (frame) {
+                if (frame.style.position === 'absolute') {
+                    var bottom = frame.getBoundingClientRect().bottom - cr.top;
+                    if (bottom > top) {
+                        top = bottom;
+                    }
+                }
+            });
+        }
+        return { left: 0, top: Math.ceil(top) };
+    }
+
+    function applyFreeFrame(frame) {
+        var id = frameId(frame);
+        var st = layout[id];
+        if (!st) {
+            st = defaultFreeSpot();
+            layout[id] = st;
+            persistLayout();
+        }
+        frame.style.position = 'absolute';
+        frame.style.left = st.left + '%';
+        frame.style.top = st.top + 'px';
+        if (st.z) {
+            frame.style.zIndex = st.z;
+            if (st.z > freeTopZ) {
+                freeTopZ = st.z;
+            }
+        }
+    }
+
+    function applyFreeToAll() {
+        if (!freeMode) {
+            return;
+        }
+        getFrames().forEach(applyFreeFrame);
+        updateFreeHeight();
+    }
+
+    function convertFreeLayout() {
+        var container = $('div.page-container');
+        if (!container) {
+            return;
+        }
+        var cr = container.getBoundingClientRect();
+        if (!cr.width) {
+            return;
+        }
+        /* measure ALL first: absolutizing one frame shifts the flow
+         * positions of the ones after it */
+        var measured = getFrames().map(function (frame) {
+            var r = frame.getBoundingClientRect();
+            return {
+                id: frameId(frame),
+                left: Math.round((r.left - cr.left) / cr.width * 1000) / 10,
+                top: Math.round(r.top - cr.top)
+            };
+        });
+        layout = {};
+        measured.forEach(function (m) {
+            layout[m.id] = { left: m.left, top: m.top };
+        });
+        persistLayout();
+    }
+
+    function setFreeMode(on, convertIfEmpty) {
+        freeMode = on;
+        document.body.classList.toggle('grid-free', on);
+        var btn = document.getElementById('gridFreeBtn');
+        if (btn) {
+            btn.classList.toggle('active', on);
+        }
+        var container = $('div.page-container');
+        if (!on) {
+            getFrames().forEach(function (frame) {
+                frame.style.position = '';
+                frame.style.left = '';
+                frame.style.top = '';
+                frame.style.zIndex = '';
+            });
+            if (container) {
+                container.style.minHeight = '';
+            }
+            return;
+        }
+        if (convertIfEmpty && Object.keys(layout).length === 0) {
+            convertFreeLayout();
+        }
+        applyFreeToAll();
+    }
+
+    function addFreeDrag(handle, frame, id) {
+        handle.addEventListener('pointerdown', function (e) {
+            if (!e.isPrimary || e.button !== 0) {
+                return;
+            }
+            e.preventDefault();
+            e.stopPropagation();
+            var container = $('div.page-container');
+            if (!container) {
+                return;
+            }
+            var cr = container.getBoundingClientRect();
+            var fr = frame.getBoundingClientRect();
+            if (!cr.width) {
+                return;
+            }
+            var grabDX = e.clientX - fr.left;
+            var grabDY = e.clientY - fr.top;
+            /* bring to front, remembered in the layout */
+            freeTopZ += 1;
+            frame.style.zIndex = freeTopZ;
+            var moved = false;
+            function onMove(ev) {
+                if (ev.pointerId !== e.pointerId) {
+                    return;
+                }
+                var c = container.getBoundingClientRect();
+                if (!c.width) {
+                    return;
+                }
+                var w = frame.getBoundingClientRect().width / c.width * 100;
+                var left = (ev.clientX - grabDX - c.left) / c.width * 100;
+                left = Math.max(0, Math.min(Math.max(0, 100 - w), left));
+                var top = Math.max(0, ev.clientY - grabDY - c.top);
+                frame.style.left = Math.round(left * 10) / 10 + '%';
+                frame.style.top = Math.round(top) + 'px';
+                moved = true;
+                updateFreeHeight();
+            }
+            function onUp(ev) {
+                if (ev.pointerId !== e.pointerId) {
+                    return;
+                }
+                document.removeEventListener('pointermove', onMove);
+                document.removeEventListener('pointerup', onUp);
+                document.removeEventListener('pointercancel', onUp);
+                if (moved) {
+                    var st = layout[id] || (layout[id] = {});
+                    st.left = parseFloat(frame.style.left) || 0;
+                    st.top = parseFloat(frame.style.top) || 0;
+                    st.z = freeTopZ;
+                    persistLayout();
+                }
+                updateFreeHeight();
+            }
+            document.addEventListener('pointermove', onMove);
+            document.addEventListener('pointerup', onUp);
+            document.addEventListener('pointercancel', onUp);
+        });
+    }
+
     /* Wrap the page's own prefs functions so `camera_sizes` rides the
      * normal server-side prefs round-trip. If those functions do not
      * exist (old version), sizes live in localStorage only. */
@@ -240,6 +490,8 @@
             var wrappedToDict = function () {
                 var dict = origToDict();
                 dict['camera_sizes'] = sizes;
+                dict['camera_layout'] = layout;
+                dict['grid_free_mode'] = freeMode;
                 return dict;
             };
             wrappedToDict._gridWrapped = true;
@@ -254,6 +506,22 @@
                     saveLocalSizes();
                     applySizes();
                 }
+                if (dict && dict['camera_layout'] && typeof dict['camera_layout'] === 'object') {
+                    layout = dict['camera_layout'];
+                    saveLocalLayout();
+                }
+                if (dict && typeof dict['grid_free_mode'] === 'boolean') {
+                    freeMode = dict['grid_free_mode'];
+                    document.body.classList.toggle('grid-free', freeMode);
+                    saveLocalFree();
+                    var fb = document.getElementById('gridFreeBtn');
+                    if (fb) {
+                        fb.classList.toggle('active', freeMode);
+                    }
+                }
+                if (freeMode) {
+                    applyFreeToAll();
+                }
             };
             wrappedFromDict._gridWrapped = true;
             window.dict2PrefsUi = wrappedFromDict;
@@ -264,8 +532,9 @@
      * The P button on a frame adds a small live inset of ANOTHER camera
      * INSIDE that frame (the host). The inset drags anywhere within
      * the host and resizes by its corner handle, both clamped to the
-     * host's bounds. Its title bar can be hidden (it otherwise covers
-     * part of the host's video); a tiny tab remains to bring it back.
+     * host's bounds. It has NO title bar: the video fills the inset,
+     * and the camera dropdown + close only appear as a strip over
+     * the top while hovering, or after tapping (tap again hides).
      * One inset per host; P again removes it. State is kept in memory
      * so insets are re-created when motionEye rebuilds the frames. */
 
@@ -712,6 +981,13 @@
             addResizeDrag(resizeHandle, frame, id);
             frame.appendChild(resizeHandle);
 
+            var freeHandle = document.createElement('div');
+            freeHandle.className = 'grid-free-handle';
+            freeHandle.textContent = '✥';
+            freeHandle.title = 'Drag to move this camera anywhere (free layout)';
+            addFreeDrag(freeHandle, frame, id);
+            frame.appendChild(freeHandle);
+
             if (!hasUpstream) {
                 addFallbackDrag(frame);
             }
@@ -723,6 +999,12 @@
             applyLocalOrder();
         }
         restoreInsets();
+        if (freeMode) {
+            if (Object.keys(layout).length === 0) {
+                convertFreeLayout();
+            }
+            applyFreeToAll();
+        }
     }
 
     /* ── Chrome toggle button + auto-hide ─────────────────────────
@@ -790,12 +1072,26 @@
         scheduleHide();
     }
 
-    function chromeBtn() {
-        var btn = document.getElementById('gridChromeBtn');
-        if (btn) {
-            return btn;
+    /* The chrome bar holds the circle button and the Free toggle as
+     * one unit. Drag it anywhere by its ⠿ grip (buttons keep their
+     * own clicks); its position is remembered. It hides on idle
+     * with everything else and returns on mouse move / tap. */
+    function chromeBar() {
+        var bar = document.getElementById('gridChromeBar');
+        if (bar) {
+            return bar;
         }
-        btn = document.createElement('div');
+        bar = document.createElement('div');
+        bar.id = 'gridChromeBar';
+
+        var grip = document.createElement('span');
+        grip.className = 'grid-bar-grip';
+        grip.textContent = '⠿';
+        grip.title = 'Drag to move this bar anywhere';
+        bar.appendChild(grip);
+
+        /* circle button (existing behavior) */
+        var btn = document.createElement('div');
         btn.id = 'gridChromeBtn';
         btn.title = 'Show/hide header';
         /* letter fallback, replaced by the logo image when it loads */
@@ -818,20 +1114,99 @@
             document.body.classList.remove('grid-idle');
             scheduleHide();
         });
-        document.body.appendChild(btn);
-        return btn;
+        bar.appendChild(btn);
+
+        /* free-layout toggle */
+        var freeBtn = document.createElement('button');
+        freeBtn.type = 'button';
+        freeBtn.id = 'gridFreeBtn';
+        freeBtn.textContent = 'Free';
+        freeBtn.title = 'Toggle free layout: drag frames anywhere';
+        freeBtn.addEventListener('click', function (ev) {
+            ev.stopPropagation();
+            setFreeMode(!freeMode, true);
+            persistFreeMode();
+        });
+        if (freeMode) {
+            freeBtn.classList.add('active');
+        }
+        bar.appendChild(freeBtn);
+
+        document.body.appendChild(bar);
+
+        /* restore saved bar position, else it stays top-center via CSS */
+        try {
+            var raw = window.localStorage.getItem(LS_BAR_POS);
+            if (raw) {
+                var pos = JSON.parse(raw);
+                if (typeof pos.left === 'number' && typeof pos.top === 'number') {
+                    bar.style.left = pos.left + 'px';
+                    bar.style.top = pos.top + 'px';
+                    bar.style.transform = 'none';
+                }
+            }
+        } catch (e) { /* default position */ }
+
+        /* drag the bar by its grip */
+        grip.addEventListener('pointerdown', function (e) {
+            if (!e.isPrimary || e.button !== 0) {
+                return;
+            }
+            e.preventDefault();
+            var rect = bar.getBoundingClientRect();
+            bar.style.left = rect.left + 'px';
+            bar.style.top = rect.top + 'px';
+            bar.style.transform = 'none';
+            var dx = e.clientX - rect.left;
+            var dy = e.clientY - rect.top;
+            function onMove(ev) {
+                if (ev.pointerId !== e.pointerId) {
+                    return;
+                }
+                var w = bar.getBoundingClientRect().width;
+                var h = bar.getBoundingClientRect().height;
+                bar.style.left = Math.max(0, Math.min(window.innerWidth - w, ev.clientX - dx)) + 'px';
+                bar.style.top = Math.max(0, Math.min(window.innerHeight - h, ev.clientY - dy)) + 'px';
+            }
+            function onUp(ev) {
+                if (ev.pointerId !== e.pointerId) {
+                    return;
+                }
+                document.removeEventListener('pointermove', onMove);
+                document.removeEventListener('pointerup', onUp);
+                document.removeEventListener('pointercancel', onUp);
+                try {
+                    window.localStorage.setItem(LS_BAR_POS, JSON.stringify({
+                        left: parseFloat(bar.style.left) || 0,
+                        top: parseFloat(bar.style.top) || 0
+                    }));
+                } catch (e) { /* ignore */ }
+            }
+            document.addEventListener('pointermove', onMove);
+            document.addEventListener('pointerup', onUp);
+            document.addEventListener('pointercancel', onUp);
+        });
+        return bar;
     }
 
     function initAutoHide() {
-        chromeBtn();
+        chromeBar();
         document.addEventListener('mousemove', onActivity);
         document.addEventListener('touchstart', onActivity, {passive: true});
+        window.addEventListener('resize', function () {
+            if (freeMode) {
+                updateFreeHeight();
+            }
+        });
         scheduleHide();
     }
 
     /* ── Boot ───────────────────────────────────────────────────── */
 
     sizes = loadLocalSizes();
+    layout = loadLocalLayout();
+    freeMode = loadLocalFree();
+    document.body.classList.toggle('grid-free', freeMode);
     wrapPrefs();
 
     var container = $('div.page-container');

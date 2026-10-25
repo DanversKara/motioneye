@@ -82,9 +82,11 @@ div.camera-frame .grid-resize-handle:hover {
 div.page-container.single-cam div.camera-frame .grid-size-btn,
 div.page-container.single-cam div.camera-frame .grid-resize-handle,
 div.page-container.single-cam div.camera-frame .grid-drag-btn,
+div.page-container.single-cam div.camera-frame .grid-free-handle,
 div.page-container.full-screen div.camera-frame .grid-size-btn,
 div.page-container.full-screen div.camera-frame .grid-resize-handle,
-div.page-container.full-screen div.camera-frame .grid-drag-btn {
+div.page-container.full-screen div.camera-frame .grid-drag-btn,
+div.page-container.full-screen div.camera-frame .grid-free-handle {
     display: none;
 }
 div.camera-frame .grid-drag-btn {
@@ -103,6 +105,42 @@ div.camera-frame .grid-drag-btn {
     cursor: grab;
     touch-action: none;
     z-index: 1;
+}
+
+/* ── Free layout ────────────────────────────────────────────────
+ * In free mode the container is the positioning context (relative)
+ * and every frame is absolutely positioned by the overlay. The
+ * reorder grips are meaningless for absolute frames, so they hide
+ * and the ✥ handle takes over. The free handle only shows in free
+ * mode (and still hides on idle / single-cam / fullscreen, per the
+ * rules above). */
+body.grid-free div.page-container {
+    position: relative;
+}
+body.grid-free div.camera-frame .move-camera,
+body.grid-free div.camera-frame .grid-drag-btn {
+    display: none !important;
+}
+div.camera-frame .grid-free-handle {
+    display: none;
+    position: absolute;
+    top: 2px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 2em;
+    height: 2em;
+    line-height: 2em;
+    text-align: center;
+    font-size: 14px;
+    color: #fff;
+    background: rgba(0, 0, 0, 0.45);
+    border-radius: 6px;
+    cursor: grab;
+    touch-action: none;
+    z-index: 5;
+}
+body.grid-free div.camera-frame .grid-free-handle {
+    display: block;
 }
 
 /* ── Float packing ──────────────────────────────────────────────
@@ -240,13 +278,36 @@ body.grid-chrome-hidden div.page-container {
     padding-bottom: 0;
 }
 
-/* ── Chrome toggle button (circle, top-center) ─────────────────── */
-
-#gridChromeBtn {
+/* ── Chrome bar (circle button + Free toggle, draggable) ────────
+ * One fixed pill, top-center by default, holding the circle button
+ * and the Free-layout toggle. Drag it anywhere by its ⠿ grip; its
+ * position is remembered. The circle button itself is no longer
+ * fixed — it rides inside the bar. */
+#gridChromeBar {
     position: fixed;
     top: 12px;
     left: 50%;
     transform: translateX(-50%);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 8px;
+    background-color: rgba(33, 33, 33, 0.55);
+    border: 1px solid rgba(255, 255, 255, 0.25);
+    border-radius: 24px;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+    z-index: 1500;
+    touch-action: none;
+    transition: opacity 0.3s ease;
+}
+#gridChromeBar .grid-bar-grip {
+    color: #fff;
+    font-size: 16px;
+    cursor: grab;
+    touch-action: none;
+    padding: 0 2px;
+}
+#gridChromeBtn {
     width: 44px;
     height: 44px;
     background-color: rgba(33, 33, 33, 0.75);
@@ -254,8 +315,20 @@ body.grid-chrome-hidden div.page-container {
     border-radius: 50%;
     box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
     cursor: pointer;
-    z-index: 1500;
     transition: opacity 0.3s ease;
+}
+#gridFreeBtn {
+    background: rgba(255, 255, 255, 0.12);
+    border: 1px solid rgba(255, 255, 255, 0.35);
+    border-radius: 14px;
+    color: #fff;
+    font-size: 12px;
+    padding: 6px 10px;
+    cursor: pointer;
+}
+#gridFreeBtn.active {
+    background: #3a7bd5;
+    border-color: #3a7bd5;
 }
 #gridChromeBtn:hover {
     background-color: rgba(33, 33, 33, 0.95);
@@ -284,14 +357,15 @@ body.grid-chrome-hidden div.page-container {
  * buttons hide with a plain rule. The PiP box stays up once opened
  * (it is a viewer, not chrome). */
 
-body.grid-idle #gridChromeBtn {
+body.grid-idle #gridChromeBar {
     opacity: 0;
     pointer-events: none;
 }
 body.grid-idle div.camera-frame .grid-size-btn,
 body.grid-idle div.camera-frame .grid-pip-btn,
 body.grid-idle div.camera-frame .grid-resize-handle,
-body.grid-idle div.camera-frame .grid-drag-btn {
+body.grid-idle div.camera-frame .grid-drag-btn,
+body.grid-idle div.camera-frame .grid-free-handle {
     display: none;
 }
 body.grid-idle div.camera-frame .move-camera {
