@@ -1,19 +1,7 @@
 [![CodeFactor rating badge](https://www.codefactor.io/repository/github/motioneye-project/motioneye/badge)](https://www.codefactor.io/repository/github/motioneye-project/motioneye)
 
-# What is motionEye?
-
-**motionEye** is an online interface for the software [_motion_](https://motion-project.github.io/), a video surveillance program with motion detection.
-
-Check out the [__wiki__](https://github.com/motioneye-project/motioneye/wiki) for more details. Changelog is available on the [__releases page__](https://github.com/motioneye-project/motioneye/releases).
-
-From version 0.43, **motionEye** is multilingual:
-
-| [![](https://hosted.weblate.org/widgets/motioneye-project/-/287x66-black.png)<br>![](https://hosted.weblate.org/widgets/motioneye-project/-/multi-auto.svg)](https://hosted.weblate.org/engage/motioneye-project/) |
-| -: |
-
-You can contribute to translations on [__Weblate__](https://hosted.weblate.org/projects/motioneye-project).
-
 # Features
+- Check Releases for a video how all this works
 
 This fork adds a flexible camera-grid overlay on top of motionEye's
 standard interface. It ships as two new files plus two lines in the
@@ -59,6 +47,19 @@ after a reload.
 
 Designed for a clean, flexible interface that maximizes screen space
 while keeping essential controls accessible.
+
+# What is motionEye?
+
+**motionEye** is an online interface for the software [_motion_](https://motion-project.github.io/), a video surveillance program with motion detection.
+
+Check out the [__wiki__](https://github.com/motioneye-project/motioneye/wiki) for more details. Changelog is available on the [__releases page__](https://github.com/motioneye-project/motioneye/releases).
+
+From version 0.43, **motionEye** is multilingual:
+
+| [![](https://hosted.weblate.org/widgets/motioneye-project/-/287x66-black.png)<br>![](https://hosted.weblate.org/widgets/motioneye-project/-/multi-auto.svg)](https://hosted.weblate.org/engage/motioneye-project/) |
+| -: |
+
+You can contribute to translations on [__Weblate__](https://hosted.weblate.org/projects/motioneye-project).
 
 # Installation
 
