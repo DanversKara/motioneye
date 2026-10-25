@@ -108,10 +108,13 @@ div.camera-frame .grid-drag-btn {
 /* ── Inset picture-in-picture ───────────────────────────────────
  * Lives INSIDE a camera frame (the frame is position:relative
  * upstream), never over the page grid. Drags and resizes only
- * within the host frame; the title bar hides on demand (a tiny
- * tab brings it back) so it never covers the host's video. The
- * inset is video you want to watch, so it is NOT hidden by the
- * idle auto-hide. */
+ * within the host frame. There is NO title bar: the video fills
+ * the whole inset, and the control strip (camera name, dropdown,
+ * close) only appears over the top of the video while you hover
+ * the inset, or after you tap it (tap again to hide). The strip
+ * is absolutely positioned, so showing it never resizes the
+ * inset. The inset is video you want to watch, so it is NOT
+ * hidden by the idle auto-hide. */
 div.camera-frame .grid-inset {
     position: absolute;
     min-width: 120px;
@@ -124,13 +127,22 @@ div.camera-frame .grid-inset {
     touch-action: none;
 }
 div.camera-frame .grid-inset .grid-inset-header {
-    display: flex;
+    display: none;
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 3;
     align-items: center;
     gap: 4px;
     padding: 3px 6px;
-    background: #333;
+    background: rgba(51, 51, 51, 0.9);
     cursor: grab;
     touch-action: none;
+}
+div.camera-frame .grid-inset:hover .grid-inset-header,
+div.camera-frame .grid-inset.show-controls .grid-inset-header {
+    display: flex;
 }
 div.camera-frame .grid-inset .grid-inset-name {
     flex: 1;
@@ -149,7 +161,6 @@ div.camera-frame .grid-inset .grid-inset-select {
     border-radius: 4px;
     font-size: 12px;
 }
-div.camera-frame .grid-inset .grid-inset-hide,
 div.camera-frame .grid-inset .grid-inset-close {
     background: transparent;
     border: none;
@@ -163,28 +174,6 @@ div.camera-frame .grid-inset .grid-inset-img {
     width: 100%;
     height: auto;
     background: #000;
-}
-div.camera-frame .grid-inset .grid-inset-tab {
-    display: none;
-    position: absolute;
-    top: 0;
-    left: 0;
-    width: 1.6em;
-    height: 1.6em;
-    line-height: 1.6em;
-    text-align: center;
-    font-size: 12px;
-    color: #fff;
-    background: rgba(0, 0, 0, 0.55);
-    border-radius: 0 0 4px 0;
-    cursor: pointer;
-    z-index: 2;
-}
-div.camera-frame .grid-inset.title-hidden .grid-inset-header {
-    display: none;
-}
-div.camera-frame .grid-inset.title-hidden .grid-inset-tab {
-    display: block;
 }
 div.camera-frame .grid-inset .grid-inset-resize {
     position: absolute;

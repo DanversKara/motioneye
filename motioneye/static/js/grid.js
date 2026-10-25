@@ -12,11 +12,13 @@
  *   2. Inset picture-in-picture: the P button on a frame adds a small
  *      live inset of ANOTHER camera INSIDE that frame. The inset drags
  *      anywhere within the host frame and resizes by its corner
- *      handle, both clamped to the host's bounds, with a dropdown to
- *      switch it to another camera. Its title bar can be hidden (it
- *      otherwise covers part of the host's video); a tiny tab remains
- *      to bring the title back. One inset per host; pressing P again
- *      removes it. Insets survive motionEye rebuilding the frames.
+ *      handle, both clamped to the host's bounds. It has NO title bar
+ *      at all (a title would cover part of the host's video): the
+ *      video fills the whole inset, and the camera dropdown + close
+ *      button only appear as a slim strip over the top of the inset
+ *      while you hover it, or after you tap it (tap again to hide).
+ *      One inset per host; pressing P again removes it. Insets
+ *      survive motionEye rebuilding the frames.
  *   3. Chrome toggle + auto-hide: a circle button (top-center, with
  *      the motionEye icon) appears whenever the mouse moves or the
  *      screen is tapped, and hides after 4 seconds idle — together
@@ -53,7 +55,7 @@
     var HIDE_IDLE_MS = 4000;
 
     var sizes = {}; /* camera id -> 'tiny' | 'large' (normal = absent) */
-    var insets = {}; /* hostId -> {cameraId, titleHidden, left, top, width} */
+    var insets = {}; /* hostId -> {cameraId, left, top, width} */
     var upstreamReorder = null; /* true/false once detected */
 
     function $(sel, root) {
@@ -283,7 +285,6 @@
     function saveInsetState(inset, hostId) {
         var st = insets[hostId] || (insets[hostId] = {});
         st.cameraId = inset.querySelector('.grid-inset-select').value;
-        st.titleHidden = inset.classList.contains('title-hidden');
         /* only left/top-anchored insets have a stored position; a
          * never-dragged inset re-appears bottom-right by default */
         if (inset.style.left) {
@@ -317,10 +318,6 @@
             if (tag === 'SELECT' || tag === 'BUTTON' || tag === 'OPTION') {
                 return;
             }
-            /* the tab restores the title, it does not drag */
-            if (e.target.classList.contains('grid-inset-tab')) {
-                return;
-            }
             e.preventDefault();
             e.stopPropagation();
             /* convert any right/bottom anchoring to left/top first */
@@ -334,9 +331,13 @@
             inset.style.bottom = 'auto';
             var startX = e.clientX;
             var startY = e.clientY;
+            var moved = false;
             function onMove(ev) {
                 if (ev.pointerId !== e.pointerId) {
                     return;
+                }
+                if (Math.abs(ev.clientX - startX) > 5 || Math.abs(ev.clientY - startY) > 5) {
+                    moved = true;
                 }
                 var w = inset.getBoundingClientRect().width;
                 var h = inset.getBoundingClientRect().height;
@@ -352,6 +353,12 @@
                 document.removeEventListener('pointermove', onMove);
                 document.removeEventListener('pointerup', onUp);
                 document.removeEventListener('pointercancel', onUp);
+                /* a tap (no drag) toggles the control strip — the
+                 * only way to reach the dropdown/close on touch,
+                 * where there is no hover */
+                if (!moved) {
+                    inset.classList.toggle('show-controls');
+                }
                 saveInsetState(inset, hostId);
             }
             document.addEventListener('pointermove', onMove);
@@ -422,10 +429,8 @@
             '<div class="grid-inset-header">' +
                 '<span class="grid-inset-name"></span>' +
                 '<select class="grid-inset-select"></select>' +
-                '<button type="button" class="grid-inset-hide" title="Hide title bar">—</button>' +
                 '<button type="button" class="grid-inset-close" title="Close picture-in-picture">✕</button>' +
             '</div>' +
-            '<div class="grid-inset-tab" title="Show title bar">≡</div>' +
             '<img class="grid-inset-img" alt="" draggable="false">' +
             '<div class="grid-inset-resize" title="Drag to resize inside this camera">⤢</div>';
         /* default: bottom-right of the host, ~30% of its width */
@@ -440,9 +445,6 @@
         setInsetCamera(inset, hostId, cameraId);
         var hostRect = host.getBoundingClientRect();
         inset.style.width = Math.max(120, Math.round(hostRect.width * 0.3)) + 'px';
-        if (state && state.titleHidden) {
-            inset.classList.add('title-hidden');
-        }
         if (state && state.width) {
             inset.style.width = Math.max(120, state.width) + 'px';
         }
@@ -460,16 +462,6 @@
         inset.querySelector('.grid-inset-close').addEventListener('click', function (ev) {
             ev.stopPropagation();
             removeInset(host);
-        });
-        inset.querySelector('.grid-inset-hide').addEventListener('click', function (ev) {
-            ev.stopPropagation();
-            inset.classList.add('title-hidden');
-            saveInsetState(inset, hostId);
-        });
-        inset.querySelector('.grid-inset-tab').addEventListener('click', function (ev) {
-            ev.stopPropagation();
-            inset.classList.remove('title-hidden');
-            saveInsetState(inset, hostId);
         });
         addInsetDrag(inset, host, hostId);
         addInsetResize(inset.querySelector('.grid-inset-resize'), inset, host, hostId);
