@@ -6,9 +6,19 @@
  *      normal -> tiny -> large -> normal. Tiny tiles are for cameras
  *      you just want to glance at (e.g. ESP32 cameras parked at the
  *      bottom of the grid); large tiles give an important camera two
- *      cells of width. Sizes persist server-side in the user's prefs
- *      (a `camera_sizes` key piggybacking on the page's own save/load
- *      functions) with a localStorage fallback on old versions.
+ *      cells of width. Dragging a frame's corner instead sets ANY
+ *      width (15–100% of the row, 1% steps), shown as "C" on the
+ *      button — the presets alone always over- or undershoot a
+ *      space, a free width fills it exactly. Sizes persist
+ *      server-side in the user's prefs (a `camera_sizes` key
+ *      piggybacking on the page's own save/load functions) with a
+ *      localStorage fallback on old versions.
+ *   1b. Float packing (grid.css): frames float left instead of
+ *      sitting inline-block, so a short frame tucks into the empty
+ *      height beside a taller one instead of leaving a black band
+ *      no later frame can use. Widths (preset or custom %) still
+ *      resolve against the container, and DOM order — hence drag
+ *      reorder — is unchanged.
  *   2. Inset picture-in-picture: the P button on a frame adds a small
  *      live inset of ANOTHER camera INSIDE that frame. The inset drags
  *      anywhere within the host frame and resizes by its corner
@@ -54,7 +64,11 @@
     };
     var HIDE_IDLE_MS = 4000;
 
-    var sizes = {}; /* camera id -> 'tiny' | 'large' (normal = absent) */
+    /* camera id -> 'tiny' | 'large' | <percent number> (normal = absent).
+     * A number is a custom width: percent of the page-container width,
+     * set by dragging a frame's corner. Percents survive window and
+     * column-count changes, unlike pixel widths. */
+    var sizes = {};
     var insets = {}; /* hostId -> {cameraId, left, top, width} */
     var upstreamReorder = null; /* true/false once detected */
 
@@ -106,16 +120,29 @@
         getFrames().forEach(function (frame) {
             var id = frameId(frame);
             frame.classList.remove('grid-size-tiny', 'grid-size-large');
-            if (sizes[id] === 'tiny') {
-                frame.classList.add('grid-size-tiny');
-            } else if (sizes[id] === 'large') {
-                frame.classList.add('grid-size-large');
-            }
+            frame.style.width = '';
+            var cur = sizes[id];
             var btn = frame.querySelector('.grid-size-btn');
-            if (btn) {
-                var cur = sizes[id] || 'normal';
-                btn.textContent = SIZE_LETTER[cur];
-                btn.title = SIZE_TITLE[cur];
+            if (typeof cur === 'number') {
+                /* custom percent width: inline style beats the column
+                 * width rule, and no size class (whose !important
+                 * width would override the inline style) */
+                frame.style.width = cur + '%';
+                if (btn) {
+                    btn.textContent = 'C';
+                    btn.title = 'Frame size: custom ' + cur + '% — click for tiny';
+                }
+            } else {
+                if (cur === 'tiny') {
+                    frame.classList.add('grid-size-tiny');
+                } else if (cur === 'large') {
+                    frame.classList.add('grid-size-large');
+                }
+                if (btn) {
+                    var preset = cur || 'normal';
+                    btn.textContent = SIZE_LETTER[preset];
+                    btn.title = SIZE_TITLE[preset];
+                }
             }
         });
     }
@@ -143,19 +170,14 @@
         persistSizes();
     }
 
-    /* Corner-drag resize: pulling a frame's bottom-right corner steps
-     * it through tiny -> normal -> large (and back) as the pointer
-     * travels, 60px per step, and the final size is saved on release.
-     * Stepped sizes keep the frame inside the column grid; free pixel
-     * widths would break the grid flow and not survive a column change. */
-    var SIZE_ORDER = ['tiny', 'normal', 'large'];
-    var RESIZE_STEP_PX = 60;
-
-    function sizeIndex(size) {
-        var idx = SIZE_ORDER.indexOf(size || 'normal');
-        return idx < 0 ? 1 : idx;
-    }
-
+    /* Corner-drag resize: pulling a frame's bottom-right corner sets
+     * its width CONTINUOUSLY, as a percent of the page-container
+     * width (15–100%, 1% steps), live-previewed while dragging and
+     * saved on release. Percent widths pack rows exactly (unlike the
+     * three coarse presets, which always over- or undershoot a
+     * space) and survive window resizes and column-count changes.
+     * The size button still cycles the three presets; a custom width
+     * shows as "C", and clicking it restarts the preset cycle. */
     function addResizeDrag(handle, frame, id) {
         handle.addEventListener('pointerdown', function (e) {
             if (!e.isPrimary || e.button !== 0) {
@@ -163,23 +185,22 @@
             }
             e.preventDefault();
             e.stopPropagation();
-            var rect = frame.getBoundingClientRect();
-            var startDist = Math.hypot(e.clientX - rect.left, e.clientY - rect.top);
-            var startIdx = sizeIndex(sizes[id] || 'normal');
-            var appliedSteps = 0;
+            var container = $('div.page-container');
+            var containerWidth = container ? container.getBoundingClientRect().width : 0;
+            var startWidth = frame.getBoundingClientRect().width;
+            var startX = e.clientX;
             var moved = false;
             function onMove(ev) {
                 if (ev.pointerId !== e.pointerId) {
                     return;
                 }
-                var dist = Math.hypot(ev.clientX - rect.left, ev.clientY - rect.top);
-                var steps = Math.trunc((dist - startDist) / RESIZE_STEP_PX);
-                if (steps !== appliedSteps) {
-                    appliedSteps = steps;
-                    var idx = Math.max(0, Math.min(SIZE_ORDER.length - 1, startIdx + steps));
-                    applySizeToMap(id, SIZE_ORDER[idx]);
-                    moved = true;
+                if (!containerWidth) {
+                    return;
                 }
+                var pct = Math.round((startWidth + (ev.clientX - startX)) / containerWidth * 100);
+                pct = Math.max(15, Math.min(100, pct));
+                applySizeToMap(id, pct);
+                moved = true;
             }
             function onUp(ev) {
                 if (ev.pointerId !== e.pointerId) {
@@ -199,8 +220,14 @@
     }
 
     function cycleSize(id) {
-        var cur = sizes[id] || 'normal';
-        var next = SIZE_CYCLE[(SIZE_CYCLE.indexOf(cur) + 1) % SIZE_CYCLE.length];
+        var cur = sizes[id];
+        /* a custom width restarts the preset cycle at tiny */
+        if (typeof cur === 'number') {
+            setSize(id, 'tiny');
+            return;
+        }
+        var preset = cur || 'normal';
+        var next = SIZE_CYCLE[(SIZE_CYCLE.indexOf(preset) + 1) % SIZE_CYCLE.length];
         setSize(id, next);
     }
 
@@ -681,7 +708,7 @@
             var resizeHandle = document.createElement('div');
             resizeHandle.className = 'grid-resize-handle';
             resizeHandle.textContent = '⤢';
-            resizeHandle.title = 'Drag the corner to resize (tiny / normal / large)';
+            resizeHandle.title = 'Drag the corner to resize freely (width % of the row)';
             addResizeDrag(resizeHandle, frame, id);
             frame.appendChild(resizeHandle);
 

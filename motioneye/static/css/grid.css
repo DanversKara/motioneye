@@ -105,6 +105,28 @@ div.camera-frame .grid-drag-btn {
     z-index: 1;
 }
 
+/* ── Float packing ──────────────────────────────────────────────
+ * Frames float left instead of sitting inline-block, so a short
+ * frame tucks into the empty height beside a taller one instead
+ * of leaving a black band no later frame can use (inline-block
+ * rows are as tall as their tallest frame, and the space under
+ * the shorter frames in a row is dead). Widths (preset or custom
+ * %) still resolve against the container, and DOM order — hence
+ * drag reorder — is unchanged. flow-root plus the clearfix keep
+ * the container wrapped around its floats so the footer stays
+ * below the grid. */
+div.page-container {
+    display: flow-root;
+}
+div.page-container::after {
+    content: "";
+    display: table;
+    clear: both;
+}
+div.page-container div.camera-frame {
+    float: left;
+}
+
 /* ── Inset picture-in-picture ───────────────────────────────────
  * Lives INSIDE a camera frame (the frame is position:relative
  * upstream), never over the page grid. Drags and resizes only
