@@ -1,0 +1,664 @@
+/* motionEye grid enhancements — overlay, loaded after main.js.
+ *
+ * Adds, without modifying any upstream file except main.html (two lines
+ * to load this file and grid.css):
+ *   1. Per-camera frame sizes: a button on every frame cycles
+ *      normal -> tiny -> large -> normal. Tiny tiles are for cameras
+ *      you just want to glance at (e.g. ESP32 cameras parked at the
+ *      bottom of the grid); large tiles give an important camera two
+ *      cells of width. Sizes persist server-side in the user's prefs
+ *      (a `camera_sizes` key piggybacking on the page's own save/load
+ *      functions) with a localStorage fallback on old versions.
+ *   2. Picture-in-picture: a button on every frame opens that camera in
+ *      a floating box (draggable by its header, resizable by its corner
+ *      handle) with a dropdown to switch it to another camera.
+ *   3. Chrome toggle + auto-hide: a circle button (top-center, with
+ *      the motionEye icon) appears whenever the mouse moves or the
+ *      screen is tapped, and hides after 4 seconds idle — together
+ *      with the header, the footer and all per-frame buttons (size,
+ *      PiP, drag grips), so nothing sits on top of the video while
+ *      you watch. Clicking the circle shows the header; clicking
+ *      again hides it. Hiding the header also drops the grid's
+ *      top/bottom padding (see grid.css), so the video slides up and
+ *      covers the freed space instead of leaving a gap. Never hides
+ *      while the settings panel or a modal is open.
+ *   4. Reorder handles always on: upstream hides the drag handles
+ *      until the "Enable Reordering" switch is turned on (and turns it
+ *      back off whenever frames are rebuilt), which is why reordering
+ *      feels missing. This overlay re-enables them after every frame
+ *      rebuild. On versions without upstream reordering at all, a
+ *      fallback drag handle is added instead (order kept in
+ *      localStorage).
+ *
+ * Vanilla JS, no jQuery dependency; every upstream global is used only
+ * if it exists, so this file degrades gracefully on older versions.
+ */
+(function () {
+    'use strict';
+
+    var LS_SIZES = 'motioneye-grid-sizes';
+    var LS_ORDER = 'motioneye-grid-order';
+    var SIZE_CYCLE = ['normal', 'tiny', 'large'];
+    var SIZE_LETTER = {normal: 'N', tiny: 'T', large: 'L'};
+    var SIZE_TITLE = {
+        normal: 'Frame size: normal — click for tiny',
+        tiny: 'Frame size: tiny — click for large',
+        large: 'Frame size: large — click for normal'
+    };
+    var HIDE_IDLE_MS = 4000;
+
+    var sizes = {}; /* camera id -> 'tiny' | 'large' (normal = absent) */
+    var pipOpen = false;
+    var upstreamReorder = null; /* true/false once detected */
+
+    function $(sel, root) {
+        return (root || document).querySelector(sel);
+    }
+
+    function $$(sel, root) {
+        return Array.prototype.slice.call((root || document).querySelectorAll(sel));
+    }
+
+    function getFrames() {
+        return $$('div.page-container div.camera-frame');
+    }
+
+    function frameId(frame) {
+        return frame.id ? frame.id.substring(6) : '';
+    }
+
+    function frameName(frame) {
+        var span = frame.querySelector('span.camera-name');
+        var name = span && span.textContent ? span.textContent.trim() : '';
+        return name || ('Camera ' + frameId(frame));
+    }
+
+    function frameStreamSrc(frame) {
+        var img = frame.querySelector('img.camera');
+        return img && img.getAttribute('src') ? img.getAttribute('src') : '';
+    }
+
+    /* ── Sizes: storage ─────────────────────────────────────────── */
+
+    function loadLocalSizes() {
+        try {
+            var raw = window.localStorage.getItem(LS_SIZES);
+            return raw ? JSON.parse(raw) : {};
+        } catch (e) {
+            return {};
+        }
+    }
+
+    function saveLocalSizes() {
+        try {
+            window.localStorage.setItem(LS_SIZES, JSON.stringify(sizes));
+        } catch (e) { /* private mode etc. — sizes still apply this session */ }
+    }
+
+    function applySizes() {
+        getFrames().forEach(function (frame) {
+            var id = frameId(frame);
+            frame.classList.remove('grid-size-tiny', 'grid-size-large');
+            if (sizes[id] === 'tiny') {
+                frame.classList.add('grid-size-tiny');
+            } else if (sizes[id] === 'large') {
+                frame.classList.add('grid-size-large');
+            }
+            var btn = frame.querySelector('.grid-size-btn');
+            if (btn) {
+                var cur = sizes[id] || 'normal';
+                btn.textContent = SIZE_LETTER[cur];
+                btn.title = SIZE_TITLE[cur];
+            }
+        });
+    }
+
+    function applySizeToMap(id, size) {
+        if (size === 'normal') {
+            delete sizes[id];
+        } else {
+            sizes[id] = size;
+        }
+        applySizes();
+    }
+
+    function persistSizes() {
+        saveLocalSizes();
+        if (typeof window.savePrefs === 'function') {
+            try {
+                window.savePrefs();
+            } catch (e) { /* prefs save is best-effort here */ }
+        }
+    }
+
+    function setSize(id, size) {
+        applySizeToMap(id, size);
+        persistSizes();
+    }
+
+    /* Corner-drag resize: pulling a frame's bottom-right corner steps
+     * it through tiny -> normal -> large (and back) as the pointer
+     * travels, 60px per step, and the final size is saved on release.
+     * Stepped sizes keep the frame inside the column grid; free pixel
+     * widths would break the grid flow and not survive a column change. */
+    var SIZE_ORDER = ['tiny', 'normal', 'large'];
+    var RESIZE_STEP_PX = 60;
+
+    function sizeIndex(size) {
+        var idx = SIZE_ORDER.indexOf(size || 'normal');
+        return idx < 0 ? 1 : idx;
+    }
+
+    function addResizeDrag(handle, frame, id) {
+        handle.addEventListener('pointerdown', function (e) {
+            if (!e.isPrimary || e.button !== 0) {
+                return;
+            }
+            e.preventDefault();
+            e.stopPropagation();
+            var rect = frame.getBoundingClientRect();
+            var startDist = Math.hypot(e.clientX - rect.left, e.clientY - rect.top);
+            var startIdx = sizeIndex(sizes[id] || 'normal');
+            var appliedSteps = 0;
+            var moved = false;
+            function onMove(ev) {
+                if (ev.pointerId !== e.pointerId) {
+                    return;
+                }
+                var dist = Math.hypot(ev.clientX - rect.left, ev.clientY - rect.top);
+                var steps = Math.trunc((dist - startDist) / RESIZE_STEP_PX);
+                if (steps !== appliedSteps) {
+                    appliedSteps = steps;
+                    var idx = Math.max(0, Math.min(SIZE_ORDER.length - 1, startIdx + steps));
+                    applySizeToMap(id, SIZE_ORDER[idx]);
+                    moved = true;
+                }
+            }
+            function onUp(ev) {
+                if (ev.pointerId !== e.pointerId) {
+                    return;
+                }
+                document.removeEventListener('pointermove', onMove);
+                document.removeEventListener('pointerup', onUp);
+                document.removeEventListener('pointercancel', onUp);
+                if (moved) {
+                    persistSizes();
+                }
+            }
+            document.addEventListener('pointermove', onMove);
+            document.addEventListener('pointerup', onUp);
+            document.addEventListener('pointercancel', onUp);
+        });
+    }
+
+    function cycleSize(id) {
+        var cur = sizes[id] || 'normal';
+        var next = SIZE_CYCLE[(SIZE_CYCLE.indexOf(cur) + 1) % SIZE_CYCLE.length];
+        setSize(id, next);
+    }
+
+    /* Wrap the page's own prefs functions so `camera_sizes` rides the
+     * normal server-side prefs round-trip. If those functions do not
+     * exist (old version), sizes live in localStorage only. */
+    function wrapPrefs() {
+        if (typeof window.prefsUi2Dict === 'function' && !window.prefsUi2Dict._gridWrapped) {
+            var origToDict = window.prefsUi2Dict;
+            var wrappedToDict = function () {
+                var dict = origToDict();
+                dict['camera_sizes'] = sizes;
+                return dict;
+            };
+            wrappedToDict._gridWrapped = true;
+            window.prefsUi2Dict = wrappedToDict;
+        }
+        if (typeof window.dict2PrefsUi === 'function' && !window.dict2PrefsUi._gridWrapped) {
+            var origFromDict = window.dict2PrefsUi;
+            var wrappedFromDict = function (dict) {
+                origFromDict(dict);
+                if (dict && dict['camera_sizes'] && typeof dict['camera_sizes'] === 'object') {
+                    sizes = dict['camera_sizes'];
+                    saveLocalSizes();
+                    applySizes();
+                }
+            };
+            wrappedFromDict._gridWrapped = true;
+            window.dict2PrefsUi = wrappedFromDict;
+        }
+    }
+
+    /* ── Picture-in-picture ─────────────────────────────────────── */
+
+    function pipBox() {
+        var box = $('#gridPipBox');
+        if (box) {
+            return box;
+        }
+        box = document.createElement('div');
+        box.id = 'gridPipBox';
+        box.hidden = true;
+        box.innerHTML =
+            '<div class="grid-pip-header">' +
+                '<span class="grid-pip-name"></span>' +
+                '<select class="grid-pip-select"></select>' +
+                '<button type="button" class="grid-pip-close" title="Close picture-in-picture">✕</button>' +
+            '</div>' +
+            '<img class="grid-pip-img" alt="">';
+        document.body.appendChild(box);
+
+        box.querySelector('.grid-pip-close').addEventListener('click', closePip);
+        box.querySelector('.grid-pip-select').addEventListener('change', function () {
+            openPip(this.value);
+        });
+
+        /* drag by the header */
+        var header = box.querySelector('.grid-pip-header');
+        header.addEventListener('pointerdown', function (e) {
+            if (!e.isPrimary || e.button !== 0 || e.target.tagName === 'SELECT' || e.target.tagName === 'BUTTON') {
+                return;
+            }
+            var rect = box.getBoundingClientRect();
+            var dx = e.clientX - rect.left;
+            var dy = e.clientY - rect.top;
+            box.style.left = rect.left + 'px';
+            box.style.top = rect.top + 'px';
+            box.style.right = 'auto';
+            box.style.bottom = 'auto';
+            function onMove(ev) {
+                if (ev.pointerId !== e.pointerId) {
+                    return;
+                }
+                box.style.left = Math.max(0, Math.min(window.innerWidth - 80, ev.clientX - dx)) + 'px';
+                box.style.top = Math.max(0, Math.min(window.innerHeight - 40, ev.clientY - dy)) + 'px';
+            }
+            function onUp(ev) {
+                if (ev.pointerId !== e.pointerId) {
+                    return;
+                }
+                document.removeEventListener('pointermove', onMove);
+                document.removeEventListener('pointerup', onUp);
+                document.removeEventListener('pointercancel', onUp);
+            }
+            document.addEventListener('pointermove', onMove);
+            document.addEventListener('pointerup', onUp);
+            document.addEventListener('pointercancel', onUp);
+            e.preventDefault();
+        });
+
+        return box;
+    }
+
+    function rebuildPipSelect() {
+        var box = $('#gridPipBox');
+        if (!box) {
+            return;
+        }
+        var select = box.querySelector('.grid-pip-select');
+        var current = select.value;
+        select.innerHTML = '';
+        getFrames().forEach(function (frame) {
+            var opt = document.createElement('option');
+            opt.value = frameId(frame);
+            opt.textContent = frameName(frame);
+            select.appendChild(opt);
+        });
+        if (current) {
+            select.value = current;
+        }
+    }
+
+    function openPip(cameraId) {
+        var box = pipBox();
+        var frame = document.getElementById('camera' + cameraId);
+        if (!frame) {
+            return;
+        }
+        var img = box.querySelector('.grid-pip-img');
+        var src = frameStreamSrc(frame);
+        if (src) {
+            img.setAttribute('src', src);
+        }
+        box.querySelector('.grid-pip-name').textContent = frameName(frame);
+        rebuildPipSelect();
+        box.querySelector('.grid-pip-select').value = cameraId;
+        box.hidden = false;
+        pipOpen = true;
+    }
+
+    function closePip() {
+        var box = $('#gridPipBox');
+        if (!box) {
+            return;
+        }
+        box.querySelector('.grid-pip-img').removeAttribute('src');
+        box.hidden = true;
+        pipOpen = false;
+    }
+
+    /* ── Reorder: upstream handles always on, fallback drag ─────── */
+
+    function detectUpstreamReorder() {
+        if (upstreamReorder !== null) {
+            return upstreamReorder;
+        }
+        upstreamReorder = !!(
+            document.querySelector('.move-camera') &&
+            typeof window.cameraOrder !== 'undefined' &&
+            typeof window.reorderCameraFrames === 'function'
+        );
+        return upstreamReorder;
+    }
+
+    function enableUpstreamReorder() {
+        var sw = document.getElementById('cameraOrderControlsSwitch');
+        if (!sw) {
+            return;
+        }
+        if (window.jQuery) {
+            window.jQuery(sw).prop('checked', true).trigger('change');
+        } else if (!sw.checked) {
+            sw.checked = true;
+            sw.dispatchEvent(new Event('change', {bubbles: true}));
+        }
+    }
+
+    function loadLocalOrder() {
+        try {
+            var raw = window.localStorage.getItem(LS_ORDER);
+            return raw ? JSON.parse(raw) : [];
+        } catch (e) {
+            return [];
+        }
+    }
+
+    function saveLocalOrder() {
+        try {
+            var ids = getFrames().map(function (f) { return frameId(f); });
+            window.localStorage.setItem(LS_ORDER, JSON.stringify(ids));
+        } catch (e) { /* ignore */ }
+    }
+
+    function applyLocalOrder() {
+        var order = loadLocalOrder();
+        if (!order.length) {
+            return;
+        }
+        var container = $('div.page-container');
+        if (!container) {
+            return;
+        }
+        var byId = {};
+        var current = getFrames();
+        current.forEach(function (f) { byId[frameId(f)] = f; });
+        /* desired order: stored ids that still exist, then any new
+         * frames (not yet stored) in their current relative order */
+        var desired = [];
+        order.forEach(function (id) {
+            if (byId[id]) {
+                desired.push(byId[id]);
+            }
+        });
+        current.forEach(function (f) {
+            if (desired.indexOf(f) < 0) {
+                desired.push(f);
+            }
+        });
+        /* only touch the DOM when the order actually differs — otherwise
+         * the observer would re-fire on every pass forever */
+        var differs = current.length !== desired.length;
+        if (!differs) {
+            for (var i = 0; i < current.length; i++) {
+                if (current[i] !== desired[i]) {
+                    differs = true;
+                    break;
+                }
+            }
+        }
+        if (!differs) {
+            return;
+        }
+        desired.forEach(function (f) {
+            container.appendChild(f);
+        });
+    }
+
+    function addFallbackDrag(frame) {
+        var handle = document.createElement('div');
+        handle.className = 'button icon mouse-effect grid-drag-btn';
+        handle.title = 'Drag to move around';
+        handle.textContent = '⠿';
+        frame.appendChild(handle);
+        handle.addEventListener('pointerdown', function (e) {
+            if (!e.isPrimary || e.button !== 0) {
+                return;
+            }
+            var source = frame;
+            var startRect = source.getBoundingClientRect();
+            var baseRect = startRect;
+            var lastX = e.clientX;
+            var lastY = e.clientY;
+            var moved = false;
+            source.classList.add('dragging');
+            e.preventDefault();
+            function rebase() {
+                source.style.transform = 'none';
+                baseRect = source.getBoundingClientRect();
+            }
+            function onEvent(ev) {
+                if (ev.pointerId !== e.pointerId) {
+                    return;
+                }
+                if (ev.type === 'pointermove' || ev.type === 'pointerup') {
+                    lastX = ev.clientX;
+                    lastY = ev.clientY;
+                    var under = document.elementFromPoint(ev.clientX, ev.clientY);
+                    under = under && under.closest('.camera-frame');
+                    if (under && under !== source && ev.type === 'pointerup') {
+                        /* swap the two frames in the DOM */
+                        var parent = source.parentElement;
+                        var next = source.nextSibling === under ? source : source.nextSibling;
+                        parent.insertBefore(source, under);
+                        parent.insertBefore(under, next);
+                        moved = true;
+                    }
+                    if (ev.type === 'pointermove') {
+                        source.style.transform = 'translate(' +
+                            (startRect.left + (lastX - e.clientX) - baseRect.left) + 'px, ' +
+                            (startRect.top + (lastY - e.clientY) - baseRect.top) + 'px)';
+                    }
+                }
+                if (ev.type === 'pointermove') {
+                    return;
+                }
+                document.removeEventListener('pointermove', onEvent);
+                document.removeEventListener('pointerup', onEvent);
+                document.removeEventListener('pointercancel', onEvent);
+                source.classList.remove('dragging');
+                source.style.transform = '';
+                if (moved) {
+                    saveLocalOrder();
+                }
+            }
+            document.addEventListener('pointermove', onEvent);
+            document.addEventListener('pointerup', onEvent);
+            document.addEventListener('pointercancel', onEvent);
+        });
+    }
+
+    /* ── Per-frame buttons ──────────────────────────────────────── */
+
+    function enhanceFrames() {
+        var frames = getFrames();
+        var hasUpstream = frames.length > 0 && detectUpstreamReorder();
+        frames.forEach(function (frame) {
+            if (frame.dataset.gridEnhanced) {
+                return;
+            }
+            frame.dataset.gridEnhanced = '1';
+            var id = frameId(frame);
+
+            var sizeBtn = document.createElement('div');
+            sizeBtn.className = 'grid-size-btn';
+            sizeBtn.addEventListener('click', function (ev) {
+                ev.stopPropagation();
+                cycleSize(id);
+            });
+            frame.appendChild(sizeBtn);
+
+            var pipBtn = document.createElement('div');
+            pipBtn.className = 'grid-pip-btn';
+            pipBtn.textContent = 'P';
+            pipBtn.title = 'Picture-in-picture';
+            pipBtn.addEventListener('click', function (ev) {
+                ev.stopPropagation();
+                openPip(id);
+            });
+            frame.appendChild(pipBtn);
+
+            var resizeHandle = document.createElement('div');
+            resizeHandle.className = 'grid-resize-handle';
+            resizeHandle.textContent = '⤢';
+            resizeHandle.title = 'Drag the corner to resize (tiny / normal / large)';
+            addResizeDrag(resizeHandle, frame, id);
+            frame.appendChild(resizeHandle);
+
+            if (!hasUpstream) {
+                addFallbackDrag(frame);
+            }
+        });
+        applySizes();
+        if (hasUpstream) {
+            enableUpstreamReorder();
+        } else {
+            applyLocalOrder();
+        }
+        if (pipOpen) {
+            rebuildPipSelect();
+        }
+    }
+
+    /* ── Chrome toggle button + auto-hide ─────────────────────────
+     * State: two body classes. grid-chrome-hidden hides the header
+     * and footer (and drops the grid padding so the video covers the
+     * freed space). grid-idle hides the circle button and all
+     * per-frame buttons (size, PiP, drag, resize) so nothing sits on
+     * the video while you watch.
+     *   - mouse move / tap: show icon + frame buttons, restart timer
+     *     (the header itself is never revealed by mouse movement —
+     *     only the circle button toggles it, by design).
+     *   - circle click: toggle the header, restart timer.
+     *   - 4s idle: hide header + footer + icon + frame buttons.
+     *   - settings/modal open: nothing hides; re-checked each timer. */
+
+    var hideTimer = null;
+
+    function chromeGuard() {
+        /* motionEye tracks dialogs by visibility, not by container
+         * children: stacked dialogs hide previous children instead
+         * of removing them, so a children-only check can stick on
+         * forever and block hiding entirely. Match motionEye's own
+         * signal: a dialog counts as open only while its container
+         * (or the dimming glass) is actually displayed. */
+        if (document.querySelector('div.settings.open')) {
+            return true;
+        }
+        var mc = document.querySelector('div.modal-container');
+        if (mc && mc.children.length > 0 && window.getComputedStyle(mc).display !== 'none') {
+            return true;
+        }
+        var glass = document.querySelector('div.modal-glass');
+        if (glass && window.getComputedStyle(glass).display !== 'none') {
+            return true;
+        }
+        return false;
+    }
+
+    function showAll() {
+        document.body.classList.remove('grid-chrome-hidden');
+        document.body.classList.remove('grid-idle');
+    }
+
+    function scheduleHide() {
+        if (hideTimer) {
+            clearTimeout(hideTimer);
+        }
+        hideTimer = setTimeout(function () {
+            if (chromeGuard()) {
+                showAll();
+                scheduleHide(); /* re-check after settings/modal close */
+            } else {
+                document.body.classList.add('grid-chrome-hidden');
+                document.body.classList.add('grid-idle');
+            }
+        }, HIDE_IDLE_MS);
+    }
+
+    function onActivity() {
+        if (chromeGuard()) {
+            showAll();
+            return;
+        }
+        document.body.classList.remove('grid-idle');
+        scheduleHide();
+    }
+
+    function chromeBtn() {
+        var btn = document.getElementById('gridChromeBtn');
+        if (btn) {
+            return btn;
+        }
+        btn = document.createElement('div');
+        btn.id = 'gridChromeBtn';
+        btn.title = 'Show/hide header';
+        /* letter fallback, replaced by the logo image when it loads */
+        var letter = document.createElement('span');
+        letter.textContent = 'M';
+        btn.appendChild(letter);
+        var logo = document.createElement('img');
+        logo.alt = '';
+        logo.onload = function () { letter.style.display = 'none'; };
+        logo.onerror = function () { logo.remove(); };
+        logo.src = (window.staticPath || 'static/') + 'img/motioneye-icon.svg';
+        btn.appendChild(logo);
+        btn.addEventListener('click', function (ev) {
+            ev.stopPropagation();
+            if (chromeGuard()) {
+                showAll();
+                return;
+            }
+            document.body.classList.toggle('grid-chrome-hidden');
+            document.body.classList.remove('grid-idle');
+            scheduleHide();
+        });
+        document.body.appendChild(btn);
+        return btn;
+    }
+
+    function initAutoHide() {
+        chromeBtn();
+        document.addEventListener('mousemove', onActivity);
+        document.addEventListener('touchstart', onActivity, {passive: true});
+        scheduleHide();
+    }
+
+    /* ── Boot ───────────────────────────────────────────────────── */
+
+    sizes = loadLocalSizes();
+    wrapPrefs();
+
+    var container = $('div.page-container');
+    if (container) {
+        enhanceFrames();
+        /* frames are rebuilt whenever cameras change; re-enhance then */
+        var observer = new MutationObserver(function (mutations) {
+            for (var i = 0; i < mutations.length; i++) {
+                if (mutations[i].type === 'childList') {
+                    enhanceFrames();
+                    break;
+                }
+            }
+        });
+        observer.observe(container, {childList: true});
+    }
+
+    initAutoHide();
+})();

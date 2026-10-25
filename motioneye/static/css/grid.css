@@ -1,0 +1,251 @@
+/* motionEye grid enhancements — companion to js/grid.js.
+ * Per-frame sizes, PiP box, and auto-hide chrome. Loaded after main.css.
+ * Size rules are scoped with :not(.single-cam) so the single-camera
+ * view keeps its full-width frame. */
+
+/* ── Per-frame sizes ────────────────────────────────────────────
+ * Frames are inline-block with percentage widths set by the
+ * .page-container column class. A size class on a frame overrides
+ * that width: tiny = half a cell, large = two cells (capped at 100%).
+ * Applies at any window width, so the button always does what it
+ * says. !important beats competing width rules on installs whose
+ * stylesheet differs; the :not() exclusions keep fullscreen,
+ * single-camera and hidden frames untouched (their own rules still
+ * win there). */
+
+div.page-container.one-column:not(.single-cam):not(.full-screen) div.camera-frame.grid-size-tiny:not(.full-screen-hidden):not(.single-cam-hidden):not(.single-cam) {
+    width: 50% !important;
+}
+div.page-container.one-column:not(.single-cam):not(.full-screen) div.camera-frame.grid-size-large:not(.full-screen-hidden):not(.single-cam-hidden):not(.single-cam) {
+    width: 100% !important;
+}
+div.page-container.two-columns:not(.single-cam):not(.full-screen) div.camera-frame.grid-size-tiny:not(.full-screen-hidden):not(.single-cam-hidden):not(.single-cam) {
+    width: 25% !important;
+}
+div.page-container.two-columns:not(.single-cam):not(.full-screen) div.camera-frame.grid-size-large:not(.full-screen-hidden):not(.single-cam-hidden):not(.single-cam) {
+    width: 100% !important;
+}
+div.page-container.three-columns:not(.single-cam):not(.full-screen) div.camera-frame.grid-size-tiny:not(.full-screen-hidden):not(.single-cam-hidden):not(.single-cam) {
+    width: 16.6667% !important;
+}
+div.page-container.three-columns:not(.single-cam):not(.full-screen) div.camera-frame.grid-size-large:not(.full-screen-hidden):not(.single-cam-hidden):not(.single-cam) {
+    width: 66.6667% !important;
+}
+div.page-container.four-columns:not(.single-cam):not(.full-screen) div.camera-frame.grid-size-tiny:not(.full-screen-hidden):not(.single-cam-hidden):not(.single-cam) {
+    width: 12.5% !important;
+}
+div.page-container.four-columns:not(.single-cam):not(.full-screen) div.camera-frame.grid-size-large:not(.full-screen-hidden):not(.single-cam-hidden):not(.single-cam) {
+    width: 50% !important;
+}
+
+/* ── Per-frame buttons (size + PiP + corner resize, fallback drag) ─ */
+
+div.camera-frame .grid-size-btn,
+div.camera-frame .grid-pip-btn,
+div.camera-frame .grid-resize-handle {
+    position: absolute;
+    width: 1.8em;
+    height: 1.8em;
+    line-height: 1.8em;
+    text-align: center;
+    font-size: 12px;
+    font-weight: bold;
+    color: #fff;
+    background: rgba(0, 0, 0, 0.55);
+    border: 1px solid rgba(255, 255, 255, 0.35);
+    border-radius: 4px;
+    cursor: pointer;
+    z-index: 5;
+    opacity: 0.55;
+}
+div.camera-frame .grid-size-btn {
+    top: 0.2em;
+    left: 0.2em;
+}
+div.camera-frame .grid-pip-btn {
+    top: 0.2em;
+    left: 2.2em;
+}
+div.camera-frame .grid-resize-handle {
+    right: 0.2em;
+    bottom: 0.2em;
+    cursor: nwse-resize;
+    touch-action: none;
+}
+div.camera-frame .grid-size-btn:hover,
+div.camera-frame .grid-pip-btn:hover,
+div.camera-frame .grid-resize-handle:hover {
+    opacity: 1;
+}
+/* Sizing and dragging are grid-view features: hide those controls in
+ * single-camera and fullscreen views (PiP stays, it is a viewer). */
+div.page-container.single-cam div.camera-frame .grid-size-btn,
+div.page-container.single-cam div.camera-frame .grid-resize-handle,
+div.page-container.single-cam div.camera-frame .grid-drag-btn,
+div.page-container.full-screen div.camera-frame .grid-size-btn,
+div.page-container.full-screen div.camera-frame .grid-resize-handle,
+div.page-container.full-screen div.camera-frame .grid-drag-btn {
+    display: none;
+}
+div.camera-frame .grid-drag-btn {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 3em;
+    height: 3em;
+    line-height: 3em;
+    text-align: center;
+    font-size: 16px;
+    color: #fff;
+    background: rgba(0, 0, 0, 0.45);
+    border-radius: 6px;
+    cursor: grab;
+    touch-action: none;
+    z-index: 1;
+}
+
+/* ── Picture-in-picture box ───────────────────────────────────── */
+
+#gridPipBox {
+    position: fixed;
+    right: 20px;
+    bottom: 60px;
+    width: 320px;
+    min-width: 160px;
+    min-height: 90px;
+    background: #212121;
+    border: 1px solid #555;
+    border-radius: 6px;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6);
+    z-index: 2000;
+    resize: both;
+    overflow: hidden;
+}
+#gridPipBox[hidden] {
+    display: none;
+}
+#gridPipBox .grid-pip-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 8px;
+    background: #333;
+    cursor: grab;
+    touch-action: none;
+}
+#gridPipBox .grid-pip-name {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: #fff;
+    font-size: 13px;
+}
+#gridPipBox .grid-pip-select {
+    flex: 0 1 auto;
+    max-width: 140px;
+    background: #333;
+    color: #fff;
+    border: 1px solid #555;
+    border-radius: 4px;
+    font-size: 13px;
+}
+#gridPipBox .grid-pip-close {
+    background: transparent;
+    border: none;
+    color: #fff;
+    font-size: 14px;
+    cursor: pointer;
+    padding: 0 4px;
+}
+#gridPipBox .grid-pip-img {
+    display: block;
+    width: 100%;
+    height: auto;
+    background: #000;
+}
+
+/* ── Auto-hide header/footer + gap fix ───────────────────────────
+ * The header is fixed, so the grid reserves 50px top padding (and
+ * 50px bottom for the footer) to sit clear of it. Dropping that
+ * padding while hidden lets the video slide up over the freed area
+ * instead of leaving an empty band. The grid's own transition
+ * animates the slide; the 0.2s here matches it. */
+
+div.header,
+div.footer {
+    transition: transform 0.2s ease, opacity 0.2s ease;
+}
+body.grid-chrome-hidden div.header {
+    transform: translateY(-100%);
+    opacity: 0;
+    pointer-events: none;
+}
+body.grid-chrome-hidden div.footer {
+    transform: translateY(100%);
+    opacity: 0;
+    pointer-events: none;
+}
+body.grid-chrome-hidden div.page-container {
+    padding-top: 0;
+    padding-bottom: 0;
+}
+
+/* ── Chrome toggle button (circle, top-center) ─────────────────── */
+
+#gridChromeBtn {
+    position: fixed;
+    top: 12px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 44px;
+    height: 44px;
+    background-color: rgba(33, 33, 33, 0.75);
+    border: 1px solid rgba(255, 255, 255, 0.35);
+    border-radius: 50%;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+    cursor: pointer;
+    z-index: 1500;
+    transition: opacity 0.3s ease;
+}
+#gridChromeBtn:hover {
+    background-color: rgba(33, 33, 33, 0.95);
+}
+#gridChromeBtn span {
+    position: absolute;
+    inset: 0;
+    line-height: 44px;
+    text-align: center;
+    font-size: 20px;
+    font-weight: bold;
+    color: #fff;
+}
+#gridChromeBtn img {
+    position: absolute;
+    width: 70%;
+    height: 70%;
+    left: 15%;
+    top: 15%;
+    object-fit: contain;
+}
+
+/* ── Idle state: icon + per-frame buttons disappear ─────────────
+ * The upstream drag handle carries an inline display style from the
+ * reorder switch, so it needs !important to hide; the overlay's own
+ * buttons hide with a plain rule. The PiP box stays up once opened
+ * (it is a viewer, not chrome). */
+
+body.grid-idle #gridChromeBtn {
+    opacity: 0;
+    pointer-events: none;
+}
+body.grid-idle div.camera-frame .grid-size-btn,
+body.grid-idle div.camera-frame .grid-pip-btn,
+body.grid-idle div.camera-frame .grid-resize-handle,
+body.grid-idle div.camera-frame .grid-drag-btn {
+    display: none;
+}
+body.grid-idle div.camera-frame .move-camera {
+    display: none !important;
+}
