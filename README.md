@@ -21,14 +21,22 @@ main template — no motionEye code is replaced — and everything below
 is an addition, not a change to how motionEye itself works.
 
 - **Free layout: move anything, anywhere.** Turn on Free mode and
-  drag any camera window to any spot on the page, even into gaps the
-  grid could never fill. Windows can overlap, and the one you grab
-  comes to the front. Turn Free off and everything drops back into
+  drag any camera window to any spot on the page — grab the video
+  itself, or the ✥ handle — even into gaps the grid could never
+  fill. Windows can overlap, and the one you grab comes to the
+  front. The button reads "Free ON" while active, so the mode is
+  always obvious. Turn Free off and everything drops back into
   the grid, exactly where it was, with your free arrangement saved
   for next time.
 - **Drag & drop resizing.** Drag a window's corner to resize it to
   any width, or cycle through preset sizes with one click. Sizes are
   remembered per camera, so your layout survives a reload.
+- **Hide cameras, keep them as PiP.** Press H on a camera to hide
+  its main view — it stays available as a picture-in-picture
+  source, so it can appear ONLY as an inset inside another camera
+  and never twice on screen. An eye button in the top bar lists
+  hidden cameras with a Show button each (plus Show all). Hidden
+  cameras stay hidden across refreshes.
 - **Auto-hide toolbars & footer.** After a few idle seconds the
   header, footer, and all on-window buttons fade away for a clean,
   distraction-free view. Move the mouse and the buttons return; the
@@ -39,9 +47,15 @@ is an addition, not a change to how motionEye itself works.
   open a live inset of another camera inside it. Drag the inset
   anywhere within that window, resize it by its corner, and switch
   cameras from its dropdown, all without leaving the main view.
+  Insets save with your prefs, so a reload brings them straight
+  back.
 - **Independent window controls.** Every window carries its own
-  size, PiP, and move controls, so each camera can be arranged on
-  its own terms while the rest of the grid stays put.
+  size, PiP, hide, and move controls, so each camera can be
+  arranged on its own terms while the rest of the grid stays put.
+
+Everything you arrange — sizes, free-layout spots, insets, hidden
+cameras — saves with your motionEye user prefs and comes back
+after a reload.
 
 Designed for a clean, flexible interface that maximizes screen space
 while keeping essential controls accessible.
